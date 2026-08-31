@@ -11,7 +11,7 @@ lists = [{"num": 1, "name": "김대훈", "age": 20},
 
 for ids in lists:
     for val in ids.values():
-        # 각 값(숫자, 문자열 등)을 문자열로 바꾼 뒤 한 글자씩 쪼갭니다
+        # 각 값(숫자, 문자열 등)을 문자열로 캐스팅 후 출력(TypeError 방지)
         for char in str(val):
             print(char, end="", flush=True)
             time.sleep(0.2)
