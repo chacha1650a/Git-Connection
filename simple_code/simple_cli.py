@@ -1,93 +1,65 @@
+# import time for time.sleep() function what is the animation for the text outputs
 import time
+import os
 
-# 5x7 dot-matrix font: '1' = pixel on, '0' = pixel off
-FONT = {
-    "W": ["10001",
-          "10001",
-          "10001",
-          "10101",
-          "10101",
-          "11011",
-          "10001"],
-    "E": ["11111",
-          "10000",
-          "10000",
-          "11110",
-          "10000",
-          "10000",
-          "11111"],
-    "L": ["10000",
-          "10000",
-          "10000",
-          "10000",
-          "10000",
-          "10000",
-          "11111"],
-    "C": ["01110",
-          "10001",
-          "10000",
-          "10000",
-          "10000",
-          "10001",
-          "01110"],
-    "O": ["01110",
-          "10001",
-          "10001",
-          "10001",
-          "10001",
-          "10001",
-          "01110"],
-    "M": ["10001",
-          "11011",
-          "10101",
-          "10101",
-          "10001",
-          "10001",
-          "10001"],
-}
+# main code entrypoint
+def startProtocol():
 
-def buildBanner(word):
-    rows = []
-    for i in range(7):
-        pieces = [FONT[ch][i].replace("1", "==").replace("0", "  ") for ch in word]
-        rows.append("  ".join(pieces))
+    text = "Loading to Start Simple CLI..."
+    for a in text:
+        print(a, end="", flush=True)
+        time.sleep(0.1)
+    print()
 
-    content_width = max(len(r) for r in rows)
-    total_width = content_width + 6  # "=  " + content + "  ="
+# comment of the before a login/signup
+def beforeLogin():
 
-    border = "=" * total_width
-    corner = "/" + "=" * (total_width - 2) + "\\"
-    blank = "=" + " " * (total_width - 2) + "="
+    text = "Please select your option"
+    for a in text:
+        print(a, end="", flush=True)
+        time.sleep(0.1)
 
-    banner = [border, corner, blank]
-    banner += ["=  " + r.ljust(content_width) + "  =" for r in rows]
-    banner += [blank, corner, border]
-    return banner, total_width
+# print line for next output
+def line():
 
-BANNER, BANNER_WIDTH = buildBanner("WELCOME")
+    print("=====================================")
+    time.sleep(0.5)
 
-def welcomeBanner():
-    for line in BANNER:
-        for char in line:
-            print(char, end="", flush=True)
-            time.sleep(0.0001)
-        print()
-        time.sleep(0.05)
+def login():
 
-startText = "Simple CLI를 부팅하는 중입니다..."
+    line()
+    text = "Please Enter your Username and Password"
+    for a in text:
+        print(a, end="", flush=True)
+        time.sleep(0.1)
+    print()
 
-for text in startText:
-    print(text, end="", flush=True)
-    time.sleep(0.05)
+    username = str(input("Username : "))
+    password = str(input("Password : "))
+    line()
 
-print()
-
-def lineProtocol():
-    print("=" * BANNER_WIDTH)
+    if (username == "chacha1650a" and password == "admin_123456"):
+        print("Login Success!")
+    else :
+        print("Username or Password is incorrect!")
 
 
-def securityProtocol():
-    print("로그인을 해주시길 바랍니다.")
+    
+# 2 options for user's select
+def selectOption():
 
-welcomeBanner()
+    print("1. Login\n2. SignUp")
+    line()
+    option = int(input())
 
+    if (option == 1):
+        login()
+    elif (option == 2):
+        print("2")
+
+# calling function 
+startProtocol()
+time.sleep(0.5)
+
+line()
+selectOption()
