@@ -3,7 +3,11 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import timedelta
-import requests 
+from dotenv import load_dotenv
+import os
+import requests
+
+load_dotenv()
 
 app = Flask(__name__)
 
@@ -182,8 +186,8 @@ def delete_post(id):
 
 
 # ----------------- 공공 데이터 연동 설정 (부산테마여행) -----------------
-PUBLIC_API_KEY = "32NYlE9tGpL2kxICKvaet1p5W3E6hGZUFVBEjeIoPAe1+Fx+yDay6XQw1rVi2j9emfDzQHKBf++FPp0aWkT6xA=="
-PUBLIC_API_URL = "http://apis.data.go.kr/6260000/RecommendedService/getRecommendedKr"
+PUBLIC_API_KEY = os.getenv("PUBLIC_API_KEY")
+PUBLIC_API_URL = os.getenv("PUBLIC_API_URL")
 
 @app.route('/api/public/posts', methods=['GET'])
 def get_public_posts():
