@@ -2,20 +2,32 @@ from flask import Flask, render_template, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from werkzeug.security import generate_password_hash, check_password_hash
-from datetime import timedelta
+from datetime import timedelta, datetime
 from dotenv import load_dotenv
 import os
 import requests
+import hmac
 
 load_dotenv()
 
 app = Flask(__name__)
 
 # 스키마 및 설정
-app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+pymysql://root:123456@localhost:3306/my_new_board_db'
+# 비밀값(DB 비밀번호·JWT 시크릿·API 키)은 코드에 쓰지 않고 .env 에서만 읽는다.
+# .env 는 .gitignore 로 제외되어 있고, 저장소에는 값이 빈 .env.example 만 올린다.
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL 이 설정되지 않았습니다. .env.example 을 복사해 .env 를 만들고 값을 채우세요."
+    )
+
+app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['JWT_SECRET_KEY'] = 'super-secret-key-change-this'
+app.config['JWT_SECRET_KEY'] = os.getenv("JWT_SECRET_KEY", "dev-only-not-for-submission")
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=2)
+
+# 보안 이벤트 수집 API 가 요구하는 키 (n8n 이 X-API-Key 헤더로 보낸다)
+SECURITY_API_KEY = os.getenv("SECURITY_API_KEY")
 
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
@@ -35,6 +47,34 @@ class Post(db.Model):
     category = db.Column(db.String(50), nullable=False, default='일반')
     author_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     author = db.relationship('User', backref=db.backref('posts', lazy=True))
+
+class SecurityEvent(db.Model):
+    """n8n 이 판정한 로그인 경보 1건을 저장한다 (과제 4)."""
+    __tablename__ = 'security_events'
+    id         = db.Column(db.Integer, primary_key=True)
+    student    = db.Column(db.String(80),  nullable=False, index=True)   # 채점 증적용 식별자
+    src_ip     = db.Column(db.String(45),  nullable=False)               # IPv6 까지 고려해 45자
+    decision   = db.Column(db.String(10),  nullable=False)               # allow / deny
+    severity   = db.Column(db.String(10))                                # High / Medium / Low
+    reason     = db.Column(db.String(255))
+    level      = db.Column(db.Integer)
+    rule       = db.Column(db.String(50))
+    fail_count = db.Column(db.Integer)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "student": self.student,
+            "src_ip": self.src_ip,
+            "decision": self.decision,
+            "severity": self.severity,
+            "reason": self.reason,
+            "level": self.level,
+            "rule": self.rule,
+            "fail_count": self.fail_count,
+            "created_at": self.created_at.isoformat() + "Z",
+        }
 
 with app.app_context():
     db.create_all()
@@ -215,6 +255,118 @@ def public_post_detail_page(uc_seq):
     return render_template('public_detail.html', uc_seq=uc_seq)
 
 
+# ----------------- 보안 이벤트 수집 API (과제 4) -----------------
+# n8n 컨테이너 -> 호스트의 이 서버로 POST 된다.
+# 컨테이너 안에서 localhost 는 컨테이너 자신이므로, n8n 쪽 URL 은
+#   http://host.docker.internal:5000/api/security/events
+# 를 써야 한다. (문제지 과제 4 힌트)
+
+REQUIRED_EVENT_FIELDS = ("student", "src_ip", "decision")
+
+def _check_api_key():
+    """인증 실패 사유를 담은 응답을 돌려주고, 통과면 None 을 돌려준다."""
+    if not SECURITY_API_KEY:
+        # 서버가 키를 설정하지 않은 상태 — 인증을 통과시키면 안 된다
+        return jsonify({"msg": "서버에 SECURITY_API_KEY 가 설정되지 않았습니다."}), 500
+    sent = request.headers.get("X-API-Key")
+    if not sent:
+        return jsonify({"msg": "X-API-Key 헤더가 없습니다."}), 401
+    # 타이밍 공격을 피하려고 단순 == 대신 상수시간 비교를 쓴다
+    if not hmac.compare_digest(sent, SECURITY_API_KEY):
+        return jsonify({"msg": "X-API-Key 가 올바르지 않습니다."}), 401
+    return None
+
+@app.route('/api/security/events', methods=['POST'])
+def create_security_event():
+    # ① 인증 먼저 (D1·D2 순서: 키가 틀리면 본문 검증 전에 401)
+    denied = _check_api_key()
+    if denied:
+        return denied
+
+    # ② 본문 검증
+    data = request.get_json(silent=True) or {}
+    missing = [f for f in REQUIRED_EVENT_FIELDS if not data.get(f)]
+    if missing:
+        return jsonify({"msg": "필수값 누락", "missing": missing}), 400
+
+    if data["decision"] not in ("allow", "deny"):
+        return jsonify({"msg": "decision 은 allow 또는 deny 여야 합니다."}), 400
+
+    def _as_int(v):
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
+    # ③ 저장
+    event = SecurityEvent(
+        student    = str(data["student"])[:80],
+        src_ip     = str(data["src_ip"])[:45],
+        decision   = data["decision"],
+        severity   = (data.get("severity") or None),
+        reason     = (str(data["reason"])[:255] if data.get("reason") else None),
+        level      = _as_int(data.get("level")),
+        rule       = (str(data["rule"])[:50] if data.get("rule") else None),
+        fail_count = _as_int(data.get("fail_count")),
+    )
+    db.session.add(event)
+    db.session.commit()
+    return jsonify(event.to_dict()), 201
+
+@app.route('/api/security/events', methods=['GET'])
+def list_security_events():
+    """본인 기록만 최신순 조회 (인증 없음)."""
+    student = request.args.get("student")
+    if not student:
+        return jsonify({"msg": "student 쿼리 파라미터가 필요합니다."}), 400
+
+    rows = (SecurityEvent.query
+            .filter_by(student=student)
+            .order_by(SecurityEvent.created_at.desc(), SecurityEvent.id.desc())
+            .limit(100)
+            .all())
+    return jsonify({"student": student, "count": len(rows),
+                    "events": [r.to_dict() for r in rows]}), 200
+
+@app.route('/api/security/events/summary', methods=['GET'])
+def security_event_summary():
+    """(심화 S1) 허용/거부 건수와 거부 상위 IP."""
+    student = request.args.get("student")
+    if not student:
+        return jsonify({"msg": "student 쿼리 파라미터가 필요합니다."}), 400
+
+    counts = dict(
+        db.session.query(SecurityEvent.decision, db.func.count(SecurityEvent.id))
+        .filter_by(student=student).group_by(SecurityEvent.decision).all()
+    )
+    top_deny = (db.session.query(SecurityEvent.src_ip, db.func.count(SecurityEvent.id).label("c"))
+                .filter_by(student=student, decision="deny")
+                .group_by(SecurityEvent.src_ip)
+                .order_by(db.desc("c"))
+                .limit(5).all())
+    return jsonify({
+        "student": student,
+        "allow": counts.get("allow", 0),
+        "deny": counts.get("deny", 0),
+        "total": sum(counts.values()),
+        "top_deny_ips": [{"src_ip": ip, "count": c} for ip, c in top_deny],
+    }), 200
+
+
 # ----------------- 앱 실행 -----------------
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    # n8n 은 도커 컨테이너 안에 있으므로, 호스트의 127.0.0.1 에만 바인딩하면
+    # 컨테이너에서 host.docker.internal 로 들어와도 'Connection refused' 가 난다.
+    # 따라서 0.0.0.0 으로 열어 둔다.
+    #
+    # 주의: 0.0.0.0 + debug=True 는 Werkzeug 디버거가 같은 네트워크에 노출되어
+    #       원격 코드 실행으로 이어질 수 있다. 그래서 debug 는 기본을 끄고,
+    #       필요할 때만 FLASK_DEBUG=1 로 켜되 신뢰된 망에서만 쓴다.
+    host  = os.getenv("FLASK_HOST", "0.0.0.0")
+    port  = int(os.getenv("FLASK_PORT", "5000"))
+    debug = os.getenv("FLASK_DEBUG", "0") == "1"
+
+    if debug and host == "0.0.0.0":
+        print("[경고] debug=True 인 채로 0.0.0.0 에 바인딩합니다. 공용 네트워크에서는 쓰지 마세요.")
+
+    app.run(host=host, port=port, debug=debug)
