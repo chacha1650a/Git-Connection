@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>관리자 페이지</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; background-color: #f9f9f9; color: #222; }
+        nav.top-nav { padding: 10px; background: #f8f9fa; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+        nav.top-nav a { margin-right: 15px; text-decoration: none; font-weight: bold; }
+        #auth-status { font-size: 14px; color: #555; }
+        .role-badge { font-size: 12px; font-weight: bold; padding: 2px 8px; border-radius: 999px; margin-left: 6px; }
+        .role-0 { background: #f3f4f6; color: #4b5563; }
+        .role-1 { background: #fef3c7; color: #92400e; }
+        .role-2 { background: #fee2e2; color: #b91c1c; }
+        .container { max-width: 900px; margin: 30px auto; padding: 0 20px; }
+        .card { background: #fff; border: 1px solid #eee; border-radius: 10px; padding: 30px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .admin-card { border-top: 4px solid #dc3545; }
+        h1 { margin-top: 0; }
+        table.users { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        table.users th, table.users td { border: 1px solid #eee; padding: 8px 10px; font-size: 14px; text-align: left; }
+        table.users th { background: #fafafa; }
+        table.users input[type="text"] { width: 100%; box-sizing: border-box; padding: 4px 6px; border: 1px solid #ddd; border-radius: 4px; }
+        table.users select { padding: 4px 6px; border: 1px solid #ddd; border-radius: 4px; }
+        table.users button { padding: 5px 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; margin-right: 4px; }
+        .btn-save { background: #4f46e5; color: #fff; }
+        .btn-delete { background: #dc3545; color: #fff; }
+        .msg-row { margin-top: 12px; font-size: 13px; }
+        .deny-box { text-align: center; padding: 60px 20px; }
+        .deny-box .icon { font-size: 48px; margin-bottom: 10px; }
+        .deny-box h2 { color: #b91c1c; margin-bottom: 8px; }
+        .deny-box table { margin: 20px auto; border-collapse: collapse; }
+        .deny-box td { padding: 6px 14px; border: 1px solid #eee; font-size: 14px; }
+        .deny-box a.home-link { display: inline-block; margin-top: 20px; color: #4f46e5; text-decoration: none; font-weight: bold; }
+        [hidden] { display: none !important; }
+    </style>
+</head>
+<body>
+    <nav class="top-nav">
+        <div>
+            <a href="/">홈(게시판)</a>
+            <a href="/public-posts" style="color:#007bff;">부산 테마여행 목록</a>
+            <a href="/gold" style="color:#b8860b;">🥇 골드 전용 페이지</a>
+            <a href="/admin" style="color:#dc3545;">🛡 관리자 페이지</a>
+        </div>
+        <div id="auth-status">확인 중...</div>
+    </nav>
+
+    <div class="container">
+        <!-- 로딩 -->
+        <div id="loading-box" class="card" style="text-align:center; color:#888;">권한 확인 중입니다...</div>
+
+        <!-- 관리자만 보이는 화면 -->
+        <div id="content-box" class="card admin-card" hidden>
+            <h1>🛡 관리자 페이지</h1>
+            <p>이 화면은 <strong>관리자 등급</strong>만 접근할 수 있습니다. 회원 목록을 불러와 등급/아이디 수정, 삭제가 가능합니다.</p>
+            <table class="users" id="users-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>아이디</th>
+                        <th>등급</th>
+                        <th>작업</th>
+                    </tr>
+                </thead>
+                <tbody id="users-tbody"></tbody>
+            </table>
+            <div class="msg-row" id="admin-msg"></div>
+        </div>
+
+        <!-- 권한 부족 / 미로그인 시 예외 화면 -->
+        <div id="deny-box" class="card deny-box" hidden>
+            <div class="icon">⛔</div>
+            <h2>접근 권한이 없습니다</h2>
+            <p id="deny-message">이 페이지는 관리자 등급만 접근할 수 있습니다.</p>
+            <table>
+                <tr><td>필요 등급</td><td><strong>관리자(2)</strong></td></tr>
+                <tr><td>현재 등급</td><td id="deny-current-role"><strong>-</strong></td></tr>
+            </table>
+            <a class="home-link" href="/">← 홈으로 돌아가기</a>
+        </div>
+    </div>
+
+    <script>
+        const ROLE_LABELS = { 0: '일반', 1: '골드', 2: '관리자' };
+        const REQUIRED_ROLE = 2; // 관리자만
+        let myId = null;
+        let token = localStorage.getItem('token');
+
+        function authHeaders() {
+            return { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
+        }
+
+        async function checkAccess() {
+            const authStatus = document.getElementById('auth-status');
+            const loadingBox = document.getElementById('loading-box');
+            const contentBox = document.getElementById('content-box');
+            const denyBox = document.getElementById('deny-box');
+
+            if (!token) {
+                authStatus.innerHTML = `<span style="color:#888;">로그인이 필요합니다</span>`;
+                loadingBox.hidden = true;
+                document.getElementById('deny-message').innerText = '로그인 후 관리자 등급만 접근할 수 있습니다.';
+                document.getElementById('deny-current-role').innerHTML = '<strong>비로그인</strong>';
+                denyBox.hidden = false;
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/auth/me', { headers: authHeaders() });
+
+                if (!res.ok) {
+                    localStorage.removeItem('token');
+                    localStorage.removeItem('username');
+                    localStorage.removeItem('role');
+                    authStatus.innerHTML = `<span style="color:#888;">로그인이 필요합니다</span>`;
+                    loadingBox.hidden = true;
+                    document.getElementById('deny-message').innerText = '로그인이 만료되었습니다. 다시 로그인해주세요.';
+                    denyBox.hidden = false;
+                    return;
+                }
+
+                const me = await res.json();
+                myId = me.id;
+                localStorage.setItem('username', me.username);
+                localStorage.setItem('role', me.role);
+
+                const badgeClass = `role-${me.role}`;
+                authStatus.innerHTML = `<strong>${me.username}</strong>님 <span class="role-badge ${badgeClass}">${me.role_label}</span> · <a href="#" onclick="logout()">로그아웃</a>`;
+                loadingBox.hidden = true;
+
+                if (me.role >= REQUIRED_ROLE) {
+                    contentBox.hidden = false;
+                    loadUsers();
+                } else {
+                    document.getElementById('deny-message').innerText = '이 페이지는 관리자 등급만 접근할 수 있습니다.';
+                    document.getElementById('deny-current-role').innerHTML = `<strong>${me.role_label}(${me.role})</strong>`;
+                    denyBox.hidden = false;
+                }
+            } catch (e) {
+                loadingBox.innerText = '권한 확인 중 오류가 발생했습니다.';
+            }
+        }
+
+        function roleOptions(selected) {
+            return Object.entries(ROLE_LABELS).map(([val, label]) =>
+                `<option value="${val}" ${Number(val) === selected ? 'selected' : ''}>${label}(${val})</option>`
+            ).join('');
+        }
+
+        async function loadUsers() {
+            const msg = document.getElementById('admin-msg');
+            msg.innerText = '';
+            const res = await fetch('/api/admin/users', { headers: authHeaders() });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                msg.style.color = '#b91c1c';
+                msg.innerText = err.msg || '회원 목록을 불러오지 못했습니다. (권한 확인 필요)';
+                return;
+            }
+            const data = await res.json();
+            const tbody = document.getElementById('users-tbody');
+            tbody.innerHTML = '';
+            data.users.forEach(u => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${u.id}</td>
+                    <td><input type="text" id="username-${u.id}" value="${u.username.replace(/"/g, '&quot;')}"></td>
+                    <td><select id="role-${u.id}">${roleOptions(u.role)}</select></td>
+                    <td>
+                        <button class="btn-save" onclick="saveUser(${u.id})">저장</button>
+                        <button class="btn-delete" onclick="deleteUser(${u.id})" ${u.id === myId ? 'disabled title="본인 계정은 삭제할 수 없습니다"' : ''}>삭제</button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        async function saveUser(id) {
+            const msg = document.getElementById('admin-msg');
+            const username = document.getElementById(`username-${id}`).value;
+            const role = Number(document.getElementById(`role-${id}`).value);
+
+            const res = await fetch(`/api/admin/users/${id}`, {
+                method: 'PUT',
+                headers: authHeaders(),
+                body: JSON.stringify({ username, role })
+            });
+            const data = await res.json().catch(() => ({}));
+
+            if (res.ok) {
+                await loadUsers();
+                msg.style.color = '#15803d';
+                msg.innerText = `#${id} 회원 정보가 수정되었습니다.`;
+                if (id === myId) {
+                    // 내 등급을 바꿨다면 헤더 표시도 갱신
+                    checkAccess();
+                }
+            } else {
+                msg.style.color = '#b91c1c';
+                msg.innerText = data.msg || '수정에 실패했습니다.';
+            }
+        }
+
+        async function deleteUser(id) {
+            if (!confirm(`#${id} 회원을 정말 삭제하시겠습니까?`)) return;
+            const msg = document.getElementById('admin-msg');
+
+            const res = await fetch(`/api/admin/users/${id}`, {
+                method: 'DELETE',
+                headers: authHeaders()
+            });
+            const data = await res.json().catch(() => ({}));
+
+            if (res.ok) {
+                await loadUsers();
+                msg.style.color = '#15803d';
+                msg.innerText = `#${id} 회원이 삭제되었습니다.`;
+            } else {
+                msg.style.color = '#b91c1c';
+                msg.innerText = data.msg || '삭제에 실패했습니다.';
+            }
+        }
+
+        function logout() {
+            localStorage.removeItem('token');
+            localStorage.removeItem('username');
+            localStorage.removeItem('role');
+            location.href = '/';
+        }
+
+        document.addEventListener('DOMContentLoaded', checkAccess);
+    </script>
+</body>
+</html>

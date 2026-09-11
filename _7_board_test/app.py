@@ -4,9 +4,12 @@ from flask_jwt_extended import JWTManager, create_access_token, jwt_required, ge
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import timedelta, datetime
 from dotenv import load_dotenv
+from functools import wraps
+from sqlalchemy import inspect, text
 import os
 import requests
 import hmac
+import click
 
 load_dotenv()
 
@@ -32,12 +35,29 @@ SECURITY_API_KEY = os.getenv("SECURITY_API_KEY")
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
 
+# ----------------- 등급(권한) 정의 (과제: 접근 제어 테스트) -----------------
+# 카페이야기 등급 체계: 일반(가입 시 기본) < 골드(중간 관리자) < 관리자
+ROLE_GENERAL = 0
+ROLE_GOLD = 1
+ROLE_ADMIN = 2
+ROLE_LABELS = {ROLE_GENERAL: '일반', ROLE_GOLD: '골드', ROLE_ADMIN: '관리자'}
+
 # ----------------- Database Models -----------------
 class User(db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     password = db.Column(db.String(255), nullable=False)
+    # 0=일반(기본, 최초 가입), 1=골드(중간 관리자), 2=관리자
+    role = db.Column(db.Integer, nullable=False, default=ROLE_GENERAL)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "username": self.username,
+            "role": self.role,
+            "role_label": ROLE_LABELS.get(self.role, "알수없음"),
+        }
 
 class Post(db.Model):
     __tablename__ = 'posts'
@@ -79,6 +99,40 @@ class SecurityEvent(db.Model):
 with app.app_context():
     db.create_all()
 
+    # 이미 만들어져 있던 users 테이블에는 role 컬럼이 없을 수 있으므로
+    # (기존 실습 DB에 데이터가 남아있는 경우) 자동으로 컬럼을 추가해준다.
+    inspector = inspect(db.engine)
+    if 'users' in inspector.get_table_names():
+        existing_columns = [col['name'] for col in inspector.get_columns('users')]
+        if 'role' not in existing_columns:
+            with db.engine.connect() as conn:
+                conn.execute(text(
+                    f'ALTER TABLE users ADD COLUMN role INTEGER NOT NULL DEFAULT {ROLE_GENERAL}'
+                ))
+                conn.commit()
+
+# ----------------- 인가(Authorization) 데코레이터 -----------------
+def role_required(min_role):
+    """로그인 + 최소 등급(min_role) 이상만 통과시킨다. (인증 실패 401, 인가 실패 403)"""
+    def decorator(fn):
+        @wraps(fn)
+        @jwt_required()
+        def wrapper(*args, **kwargs):
+            user = User.query.get(int(get_jwt_identity()))
+            if not user:
+                return jsonify({"msg": "사용자를 찾을 수 없습니다."}), 404
+            if user.role < min_role:
+                return jsonify({
+                    "msg": "해당 등급의 접근 권한이 없습니다.",
+                    "required_role": min_role,
+                    "required_role_label": ROLE_LABELS.get(min_role),
+                    "your_role": user.role,
+                    "your_role_label": ROLE_LABELS.get(user.role),
+                }), 403
+            return fn(*args, **kwargs)
+        return wrapper
+    return decorator
+
 # ----------------- Auth Endpoints -----------------
 @app.route('/api/auth/register', methods=['POST'])
 def register():
@@ -93,7 +147,8 @@ def register():
         return jsonify({"msg": "이미 존재하는 아이디입니다."}), 400
 
     hashed_password = generate_password_hash(password)
-    new_user = User(username=username, password=hashed_password)
+    # 회원가입은 항상 '일반' 등급으로만 생성한다. (등급 상승은 관리자 페이지에서만 가능)
+    new_user = User(username=username, password=hashed_password, role=ROLE_GENERAL)
     db.session.add(new_user)
     db.session.commit()
 
@@ -112,8 +167,20 @@ def login():
     access_token = create_access_token(identity=str(user.id))
     return jsonify({
         "access_token": access_token,
-        "username": user.username
+        "username": user.username,
+        "role": user.role,
+        "role_label": ROLE_LABELS.get(user.role),
     }), 200
+
+@app.route('/api/auth/me', methods=['GET'])
+@jwt_required()
+def me():
+    """현재 로그인한 사용자의 최신 등급을 DB에서 다시 조회해 돌려준다.
+    (등급이 바뀐 뒤에도 재로그인 없이 최신 권한을 확인할 수 있도록 하기 위함)"""
+    user = User.query.get(int(get_jwt_identity()))
+    if not user:
+        return jsonify({"msg": "사용자를 찾을 수 없습니다."}), 404
+    return jsonify(user.to_dict()), 200
 
 # ----------------- Post Endpoints (RESTful) -----------------
 @app.route('/')
@@ -223,6 +290,68 @@ def delete_post(id):
     db.session.delete(post)
     db.session.commit()
     return jsonify({"msg": "게시글이 삭제되었습니다."}), 200
+
+
+# ----------------- 등급별 화면 (과제: 접근 제어 테스트) -----------------
+# 이 프로젝트는 로그인 상태를 localStorage 의 JWT 로 관리하므로(쿠키 미사용),
+# 서버는 페이지 자체는 누구에게나 내려주고, 페이지 안의 JS 가 /api/auth/me 를
+# Authorization: Bearer <token> 헤더로 호출해 실제 등급을 확인한 뒤
+# 화면에 콘텐츠 또는 "접근 권한 없음" 예외 화면을 그린다.
+# ★ 실질적인 접근 제어(진짜 보안)는 아래 /api/admin/... 의 role_required 데코레이터가
+#   서버 쪽에서 강제한다. 페이지의 JS 체크는 사용자 경험(화면 분기)일 뿐이다.
+@app.route('/gold')
+def gold_page():
+    return render_template('gold.html')
+
+@app.route('/admin')
+def admin_page():
+    return render_template('admin.html')
+
+# ----------------- 관리자 전용 회원 관리 API -----------------
+@app.route('/api/admin/users', methods=['GET'])
+@role_required(ROLE_ADMIN)
+def admin_list_users():
+    users = User.query.order_by(User.id.asc()).all()
+    return jsonify({"users": [u.to_dict() for u in users]}), 200
+
+@app.route('/api/admin/users/<int:id>', methods=['PUT'])
+@role_required(ROLE_ADMIN)
+def admin_update_user(id):
+    target = User.query.get_or_404(id)
+    data = request.get_json() or {}
+
+    if 'username' in data and data['username']:
+        new_username = data['username']
+        dup = User.query.filter(User.username == new_username, User.id != id).first()
+        if dup:
+            return jsonify({"msg": "이미 존재하는 아이디입니다."}), 400
+        target.username = new_username
+
+    if 'role' in data:
+        try:
+            new_role = int(data['role'])
+        except (TypeError, ValueError):
+            return jsonify({"msg": "role 값이 올바르지 않습니다."}), 400
+        if new_role not in ROLE_LABELS:
+            return jsonify({"msg": "role 은 0(일반)/1(골드)/2(관리자) 중 하나여야 합니다."}), 400
+        target.role = new_role
+
+    db.session.commit()
+    return jsonify({"msg": "회원 정보가 수정되었습니다.", "user": target.to_dict()}), 200
+
+@app.route('/api/admin/users/<int:id>', methods=['DELETE'])
+@role_required(ROLE_ADMIN)
+def admin_delete_user(id):
+    current_user_id = int(get_jwt_identity())
+    if id == current_user_id:
+        return jsonify({"msg": "본인 계정은 관리자 페이지에서 삭제할 수 없습니다."}), 400
+
+    target = User.query.get_or_404(id)
+    # 해당 유저가 작성한 게시글도 함께 정리한다. (author_id 외래키 제약)
+    Post.query.filter_by(author_id=target.id).delete()
+    db.session.delete(target)
+    db.session.commit()
+    return jsonify({"msg": "회원이 삭제되었습니다."}), 200
 
 
 # ----------------- 공공 데이터 연동 설정 (부산테마여행) -----------------
@@ -351,6 +480,28 @@ def security_event_summary():
         "total": sum(counts.values()),
         "top_deny_ips": [{"src_ip": ip, "count": c} for ip, c in top_deny],
     }), 200
+
+
+# ----------------- 최초 관리자 부트스트랩용 CLI -----------------
+# 회원가입은 항상 '일반' 등급으로만 생성되므로(위 register 참고), 맨 처음
+# 관리자 계정을 만들려면 이 CLI 로 등급을 직접 올려야 한다.
+# (등급 변경용 API 엔드포인트를 인증 없이 열어두면 그 자체가 취약점이 되므로
+#  서버 콘솔에만 존재하는 CLI 명령으로 제공한다.)
+# 사용법: flask --app app.py set-role <아이디> <등급 0/1/2>
+@app.cli.command('set-role')
+@click.argument('username')
+@click.argument('role', type=int)
+def set_role_command(username, role):
+    if role not in ROLE_LABELS:
+        click.echo('role 은 0(일반)/1(골드)/2(관리자) 중 하나여야 합니다.')
+        return
+    user = User.query.filter_by(username=username).first()
+    if not user:
+        click.echo(f'{username} 사용자를 찾을 수 없습니다.')
+        return
+    user.role = role
+    db.session.commit()
+    click.echo(f'{username} 님의 등급을 {ROLE_LABELS[role]}({role}) 로 변경했습니다.')
 
 
 # ----------------- 앱 실행 -----------------

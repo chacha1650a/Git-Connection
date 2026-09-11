@@ -15,9 +15,17 @@
         .card-title { font-size: 16px; font-weight: bold; margin-bottom: 10px; color: #333; text-decoration: none; }
         .card-title:hover { color: #007bff; }
         .loading { text-align: center; font-size: 18px; color: #666; margin: 40px 0; }
+        nav.top-nav { padding: 10px; background: #f8f9fa; margin-bottom: 20px; border-radius: 6px; }
+        nav.top-nav a { margin-right: 15px; text-decoration: none; font-weight: bold; }
     </style>
 </head>
 <body>
+    <nav class="top-nav">
+        <a href="/">홈(게시판)</a>
+        <a href="/public-posts" style="color:#007bff;">부산 테마여행 목록</a>
+        <a href="/gold" style="color:#b8860b;">🥇 골드 전용 페이지</a>
+        <a href="/admin" style="color:#dc3545;">🛡 관리자 페이지</a>
+    </nav>
     <div class="container">
         <h1>부산 테마여행 추천 (100선)</h1>
         <div id="loading" class="loading">목록을 불러오는 중입니다...</div>
