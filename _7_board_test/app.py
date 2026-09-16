@@ -1,6 +1,9 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, g
 from flask_sqlalchemy import SQLAlchemy
-from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from flask_jwt_extended import (
+    JWTManager, create_access_token, jwt_required, get_jwt_identity,
+    verify_jwt_in_request,
+)
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import timedelta, datetime
 from dotenv import load_dotenv
@@ -32,6 +35,13 @@ app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=2)
 # 보안 이벤트 수집 API 가 요구하는 키 (n8n 이 X-API-Key 헤더로 보낸다)
 SECURITY_API_KEY = os.getenv("SECURITY_API_KEY")
 
+# 관리자 API(권한 부여/회수)를 기계(파이썬 봇·n8n)가 두드릴 때 쓰는 키.
+# 비어 있으면 SECURITY_API_KEY 로 대체한다(문서 4-3).
+ADMIN_API_KEY = os.getenv("ADMIN_API_KEY") or SECURITY_API_KEY
+
+# 이 목록 밖의 admin 은 과잉권한으로 간주해 회수 대상이 된다(콤마 구분).
+ADMIN_ALLOWLIST = {u.strip() for u in os.getenv("ADMIN_ALLOWLIST", "").split(",") if u.strip()}
+
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
 
@@ -50,6 +60,10 @@ class User(db.Model):
     password = db.Column(db.String(255), nullable=False)
     # 0=일반(기본, 최초 가입), 1=골드(중간 관리자), 2=관리자
     role = db.Column(db.Integer, nullable=False, default=ROLE_GENERAL)
+    # 권한 부여/회수 감사 추적용 (누가, 언제, 왜 이 등급을 줬는지)
+    role_granted_by = db.Column(db.String(80), nullable=True)
+    role_granted_at = db.Column(db.DateTime, nullable=True)
+    role_reason = db.Column(db.String(200), nullable=True)
 
     def to_dict(self):
         return {
@@ -57,6 +71,9 @@ class User(db.Model):
             "username": self.username,
             "role": self.role,
             "role_label": ROLE_LABELS.get(self.role, "알수없음"),
+            "role_granted_by": self.role_granted_by,
+            "role_granted_at": self.role_granted_at.isoformat() + "Z" if self.role_granted_at else None,
+            "role_reason": self.role_reason,
         }
 
 class Post(db.Model):
@@ -80,6 +97,7 @@ class SecurityEvent(db.Model):
     level      = db.Column(db.Integer)
     rule       = db.Column(db.String(50))
     fail_count = db.Column(db.Integer)
+    source     = db.Column(db.String(50))                                # 예: privilege-guard (과잉권한 회수봇)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     def to_dict(self):
@@ -93,22 +111,35 @@ class SecurityEvent(db.Model):
             "level": self.level,
             "rule": self.rule,
             "fail_count": self.fail_count,
+            "source": self.source,
             "created_at": self.created_at.isoformat() + "Z",
         }
 
 with app.app_context():
     db.create_all()
 
-    # 이미 만들어져 있던 users 테이블에는 role 컬럼이 없을 수 있으므로
-    # (기존 실습 DB에 데이터가 남아있는 경우) 자동으로 컬럼을 추가해준다.
+    # 이미 만들어져 있던 users/security_events 테이블에는 새로 추가한 컬럼이
+    # 없을 수 있으므로(기존 실습 DB에 데이터가 남아있는 경우) 자동으로 추가해준다.
     inspector = inspect(db.engine)
     if 'users' in inspector.get_table_names():
         existing_columns = [col['name'] for col in inspector.get_columns('users')]
-        if 'role' not in existing_columns:
+        user_column_adds = {
+            'role': f'ALTER TABLE users ADD COLUMN role INTEGER NOT NULL DEFAULT {ROLE_GENERAL}',
+            'role_granted_by': 'ALTER TABLE users ADD COLUMN role_granted_by VARCHAR(80) NULL',
+            'role_granted_at': 'ALTER TABLE users ADD COLUMN role_granted_at DATETIME NULL',
+            'role_reason': 'ALTER TABLE users ADD COLUMN role_reason VARCHAR(200) NULL',
+        }
+        with db.engine.connect() as conn:
+            for col_name, ddl in user_column_adds.items():
+                if col_name not in existing_columns:
+                    conn.execute(text(ddl))
+                    conn.commit()
+
+    if 'security_events' in inspector.get_table_names():
+        existing_event_columns = [col['name'] for col in inspector.get_columns('security_events')]
+        if 'source' not in existing_event_columns:
             with db.engine.connect() as conn:
-                conn.execute(text(
-                    f'ALTER TABLE users ADD COLUMN role INTEGER NOT NULL DEFAULT {ROLE_GENERAL}'
-                ))
+                conn.execute(text('ALTER TABLE security_events ADD COLUMN source VARCHAR(50) NULL'))
                 conn.commit()
 
 # ----------------- 인가(Authorization) 데코레이터 -----------------
@@ -132,6 +163,37 @@ def role_required(min_role):
             return fn(*args, **kwargs)
         return wrapper
     return decorator
+
+def _valid_admin_api_key():
+    """관리자 API에 기계(봇/n8n)가 X-API-Key 로 접근할 때의 검사."""
+    if not ADMIN_API_KEY:
+        return False
+    sent = request.headers.get("X-API-Key")
+    return bool(sent) and hmac.compare_digest(sent, ADMIN_API_KEY)
+
+def admin_required(fn):
+    """관리자 API 접근 제어. 기계는 X-API-Key, 사람은 JWT + role=admin (문서 4-2)."""
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if _valid_admin_api_key():
+            g.admin_actor = "apikey"
+            return fn(*args, **kwargs)
+
+        verify_jwt_in_request()  # 토큰 없음/무효면 여기서 401 로 응답됨
+        user = User.query.get(int(get_jwt_identity()))
+        if not user:
+            return jsonify({"msg": "사용자를 찾을 수 없습니다."}), 404
+        if user.role < ROLE_ADMIN:
+            return jsonify({
+                "msg": "해당 등급의 접근 권한이 없습니다.",
+                "required_role": ROLE_ADMIN,
+                "required_role_label": ROLE_LABELS.get(ROLE_ADMIN),
+                "your_role": user.role,
+                "your_role_label": ROLE_LABELS.get(user.role),
+            }), 403
+        g.admin_actor = user.username
+        return fn(*args, **kwargs)
+    return wrapper
 
 # ----------------- Auth Endpoints -----------------
 @app.route('/api/auth/register', methods=['POST'])
@@ -307,15 +369,141 @@ def gold_page():
 def admin_page():
     return render_template('admin.html')
 
+# 실질적인 골드 등급 강제는 여기서 서버가 한다 (문서 4-6 핵심 교훈:
+# "화면에서 메뉴를 숨기는 건 보안이 아니다" — /gold 링크만 숨겨도 이 API 를 직접
+# 두드리면 role_required 가 gold 미만은 403, 미로그인은 401 로 그대로 차단한다).
+@app.route('/api/gold/posts', methods=['GET'])
+@role_required(ROLE_GOLD)
+def gold_posts():
+    return jsonify({"notices": [
+        "📌 중간 관리자 공지: 이번 주 게시판 신고 내역을 확인해주세요.",
+        "📌 골드 등급 전용 안내: 우수 회원 이벤트가 곧 오픈됩니다.",
+        "📌 관리자 페이지 접근은 여전히 관리자 등급만 가능합니다.",
+    ]}), 200
+
 # ----------------- 관리자 전용 회원 관리 API -----------------
+ROLE_NAME_TO_INT = {'user': ROLE_GENERAL, 'gold': ROLE_GOLD, 'admin': ROLE_ADMIN}
+
+def _parse_role(value):
+    """'user'/'gold'/'admin' 또는 0/1/2 문자열·숫자를 등급 정수로 변환한다. 실패 시 None."""
+    if value is None:
+        return None
+    if isinstance(value, str) and value in ROLE_NAME_TO_INT:
+        return ROLE_NAME_TO_INT[value]
+    try:
+        as_int = int(value)
+    except (TypeError, ValueError):
+        return None
+    return as_int if as_int in ROLE_LABELS else None
+
 @app.route('/api/admin/users', methods=['GET'])
-@role_required(ROLE_ADMIN)
+@admin_required
 def admin_list_users():
-    users = User.query.order_by(User.id.asc()).all()
+    query = User.query
+    role_param = request.args.get('role')
+    if role_param is not None:
+        parsed = _parse_role(role_param)
+        if parsed is None:
+            return jsonify({"msg": "role 은 user/gold/admin(또는 0/1/2) 중 하나여야 합니다."}), 400
+        query = query.filter(User.role == parsed)
+    users = query.order_by(User.id.asc()).all()
     return jsonify({"users": [u.to_dict() for u in users]}), 200
 
+@app.route('/api/admin/violations', methods=['GET'])
+@admin_required
+def admin_violations():
+    """허용목록(ADMIN_ALLOWLIST) 밖의 admin — 과잉권한 후보 목록."""
+    admins = User.query.filter_by(role=ROLE_ADMIN).order_by(User.id.asc()).all()
+    violators = [u for u in admins if u.username not in ADMIN_ALLOWLIST]
+    return jsonify({"violations": [u.to_dict() for u in violators]}), 200
+
+@app.route('/api/admin/grant', methods=['POST'])
+@admin_required
+def admin_grant():
+    data = request.get_json(silent=True) or {}
+    username = data.get('username')
+    if not username:
+        return jsonify({"msg": "username 이 필요합니다."}), 400
+
+    new_role = _parse_role(data.get('role', 'admin'))
+    if new_role is None:
+        return jsonify({"msg": "role 은 user/gold/admin(또는 0/1/2) 중 하나여야 합니다."}), 400
+
+    target = User.query.filter_by(username=username).first()
+    if not target:
+        return jsonify({"msg": "사용자를 찾을 수 없습니다."}), 404
+
+    old_role = target.role
+    target.role = new_role
+    target.role_granted_by = g.get('admin_actor', 'apikey')
+    target.role_granted_at = datetime.utcnow()
+    target.role_reason = (data.get('reason') or None)
+    db.session.commit()
+
+    return jsonify({
+        "msg": "권한이 부여되었습니다.",
+        "username": target.username,
+        "old_role": old_role,
+        "new_role": new_role,
+    }), 200
+
+@app.route('/api/admin/revoke', methods=['POST'])
+@admin_required
+def admin_revoke():
+    """과잉권한 admin 을 user 로 되돌린다 (멱등: 이미 admin 이 아니면 조용히 통과)."""
+    data = request.get_json(silent=True) or {}
+    username = data.get('username')
+    if not username:
+        return jsonify({"msg": "username 이 필요합니다."}), 400
+
+    target = User.query.filter_by(username=username).first()
+    if not target:
+        return jsonify({"msg": "사용자를 찾을 수 없습니다."}), 404
+
+    old_role = target.role
+    actor = g.get('admin_actor', 'apikey')
+
+    if old_role != ROLE_ADMIN:
+        return jsonify({
+            "msg": "회수 완료",
+            "username": target.username,
+            "old_role": old_role,
+            "new_role": old_role,
+            "revoked": False,
+            "revoked_by": actor,
+        }), 200
+
+    reason = (data.get('reason') or '과잉권한 자동회수')[:200]
+    target.role = ROLE_GENERAL
+    target.role_granted_by = actor
+    target.role_granted_at = datetime.utcnow()
+    target.role_reason = reason
+    db.session.commit()
+
+    event = SecurityEvent(
+        student=str(data.get('student') or username)[:80],
+        src_ip=str(data.get('src_ip') or '0.0.0.0')[:45],
+        decision='deny',
+        severity=(data.get('severity') or 'High'),
+        reason=reason[:255],
+        rule='priv-unauthorized-admin',
+        source='privilege-guard',
+    )
+    db.session.add(event)
+    db.session.commit()
+
+    return jsonify({
+        "msg": "회수 완료",
+        "username": target.username,
+        "old_role": old_role,
+        "new_role": target.role,
+        "revoked": True,
+        "event_id": event.id,
+        "revoked_by": actor,
+    }), 200
+
 @app.route('/api/admin/users/<int:id>', methods=['PUT'])
-@role_required(ROLE_ADMIN)
+@admin_required
 def admin_update_user(id):
     target = User.query.get_or_404(id)
     data = request.get_json() or {}
@@ -340,11 +528,14 @@ def admin_update_user(id):
     return jsonify({"msg": "회원 정보가 수정되었습니다.", "user": target.to_dict()}), 200
 
 @app.route('/api/admin/users/<int:id>', methods=['DELETE'])
-@role_required(ROLE_ADMIN)
+@admin_required
 def admin_delete_user(id):
-    current_user_id = int(get_jwt_identity())
-    if id == current_user_id:
-        return jsonify({"msg": "본인 계정은 관리자 페이지에서 삭제할 수 없습니다."}), 400
+    # g.admin_actor 는 사람(JWT)일 때만 실제 username 이고, 기계(X-API-Key)일 땐 'apikey' 이다.
+    actor_username = g.get('admin_actor')
+    if actor_username and actor_username != 'apikey':
+        actor = User.query.filter_by(username=actor_username).first()
+        if actor and actor.id == id:
+            return jsonify({"msg": "본인 계정은 관리자 페이지에서 삭제할 수 없습니다."}), 400
 
     target = User.query.get_or_404(id)
     # 해당 유저가 작성한 게시글도 함께 정리한다. (author_id 외래키 제약)

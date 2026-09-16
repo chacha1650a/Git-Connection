@@ -47,11 +47,7 @@
         <div id="content-box" class="card gold-card" hidden>
             <h1>🥇 골드 전용 페이지</h1>
             <p>이 화면은 <strong>골드 등급(중간 관리자) 이상</strong>만 접근할 수 있습니다.</p>
-            <div id="notice-list">
-                <div class="notice-item">📌 중간 관리자 공지: 이번 주 게시판 신고 내역을 확인해주세요.</div>
-                <div class="notice-item">📌 골드 등급 전용 안내: 우수 회원 이벤트가 곧 오픈됩니다.</div>
-                <div class="notice-item">📌 관리자 페이지 접근은 여전히 관리자 등급만 가능합니다.</div>
-            </div>
+            <div id="notice-list">불러오는 중...</div>
         </div>
 
         <!-- 권한 부족 / 미로그인 시 예외 화면 -->
@@ -114,6 +110,7 @@
 
                 if (me.role >= REQUIRED_ROLE) {
                     contentBox.hidden = false;
+                    loadGoldContent(token);
                 } else {
                     document.getElementById('deny-message').innerText = '이 페이지는 골드 등급 이상만 접근할 수 있습니다.';
                     document.getElementById('deny-current-role').innerHTML = `<strong>${me.role_label}(${me.role})</strong>`;
@@ -121,6 +118,28 @@
                 }
             } catch (e) {
                 loadingBox.innerText = '권한 확인 중 오류가 발생했습니다.';
+            }
+        }
+
+        // 실제 골드 콘텐츠는 서버가 /api/gold/posts 에서 다시 등급을 검사한 뒤 내려준다.
+        // (화면 분기는 UX 일 뿐, 진짜 접근 제어는 여기 서버 응답이다.)
+        async function loadGoldContent(token) {
+            const noticeList = document.getElementById('notice-list');
+            try {
+                const res = await fetch('/api/gold/posts', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    noticeList.innerText = err.msg || '골드 콘텐츠를 불러오지 못했습니다.';
+                    return;
+                }
+                const data = await res.json();
+                noticeList.innerHTML = data.notices
+                    .map(n => `<div class="notice-item">${n}</div>`)
+                    .join('');
+            } catch (e) {
+                noticeList.innerText = '골드 콘텐츠를 불러오는 중 오류가 발생했습니다.';
             }
         }
 
