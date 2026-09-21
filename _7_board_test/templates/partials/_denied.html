@@ -1,0 +1,67 @@
+{# 등급 부족 예외 화면 — 등급 제한이 걸린 페이지가 공통으로 include 한다.
+
+   쓰는 법
+     1) 보호할 내용을 <div id="protected-view" class="hidden"> ... </div> 로 감싼다.
+     2) 통과하면  showProtected()
+        모자라면  showDenied({ required: 'gold', current: 'user' })
+                  showDenied({ required: 'gold', current: null })  ← 미로그인
+#}
+<section id="denied-view" class="hidden">
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 px-6 py-14 text-center">
+    <div class="text-6xl mb-4" aria-hidden="true">🚫</div>
+
+    <h2 id="denied-title" class="text-2xl font-bold text-gray-800">접근 권한이 없습니다</h2>
+    <p id="denied-msg" class="text-gray-500 mt-2 text-sm">이 페이지는 등급 제한이 걸려 있습니다.</p>
+
+    <div class="flex items-center justify-center gap-3 mt-6 text-sm">
+      <div class="px-4 py-2 rounded-lg bg-amber-50 border border-amber-200">
+        <div class="text-xs text-amber-600 mb-0.5">필요 등급</div>
+        <div id="denied-required" class="font-bold text-amber-800">골드</div>
+      </div>
+      <div class="text-gray-300 text-xl" aria-hidden="true">›</div>
+      <div class="px-4 py-2 rounded-lg bg-gray-50 border border-gray-200">
+        <div class="text-xs text-gray-500 mb-0.5">현재 등급</div>
+        <div id="denied-current" class="font-bold text-gray-700">비로그인</div>
+      </div>
+    </div>
+
+    <div class="flex flex-col sm:flex-row gap-2 justify-center mt-8">
+      <a href="/" class="px-5 py-2.5 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 transition">게시판으로 돌아가기</a>
+      <a id="denied-login" href="/" class="px-5 py-2.5 rounded-lg border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50 transition hidden">로그인하러 가기</a>
+    </div>
+
+    <p class="text-xs text-gray-400 mt-8">
+      등급이 필요하면 관리자에게 요청하세요. (관리자 페이지 → 권한 부여)
+    </p>
+  </div>
+</section>
+
+<script>
+  // 등급 이름 — 서버(models/user.py 의 ROLE_LABEL)와 같은 표를 화면에서도 쓴다.
+  const ROLE_LABEL = { user: '일반', gold: '골드', admin: '관리자' };
+  const roleName = (r) => ROLE_LABEL[r] || r || '비로그인';
+
+  function showDenied({ required = 'gold', current = null, message = '' } = {}) {
+    const denied = document.getElementById('denied-view');
+    const protectedView = document.getElementById('protected-view');
+    if (protectedView) protectedView.classList.add('hidden');
+
+    const anonymous = !current;
+    document.getElementById('denied-title').textContent =
+      anonymous ? '로그인이 필요합니다' : '접근 권한이 없습니다';
+    document.getElementById('denied-msg').textContent = message || (anonymous
+      ? `이 페이지는 ${roleName(required)} 등급 이상만 볼 수 있습니다. 먼저 로그인해 주세요.`
+      : `이 페이지는 ${roleName(required)} 등급 이상만 볼 수 있습니다.`);
+    document.getElementById('denied-required').textContent = roleName(required);
+    document.getElementById('denied-current').textContent = roleName(current);
+    document.getElementById('denied-login').classList.toggle('hidden', !anonymous);
+
+    denied.classList.remove('hidden');
+  }
+
+  function showProtected() {
+    document.getElementById('denied-view').classList.add('hidden');
+    const protectedView = document.getElementById('protected-view');
+    if (protectedView) protectedView.classList.remove('hidden');
+  }
+</script>

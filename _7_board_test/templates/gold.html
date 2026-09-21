@@ -1,156 +1,161 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>골드 전용 페이지</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 0; background-color: #f9f9f9; color: #222; }
-        nav.top-nav { padding: 10px; background: #f8f9fa; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
-        nav.top-nav a { margin-right: 15px; text-decoration: none; font-weight: bold; }
-        #auth-status { font-size: 14px; color: #555; }
-        .role-badge { font-size: 12px; font-weight: bold; padding: 2px 8px; border-radius: 999px; margin-left: 6px; }
-        .role-0 { background: #f3f4f6; color: #4b5563; }
-        .role-1 { background: #fef3c7; color: #92400e; }
-        .role-2 { background: #fee2e2; color: #b91c1c; }
-        .container { max-width: 800px; margin: 30px auto; padding: 0 20px; }
-        .card { background: #fff; border: 1px solid #eee; border-radius: 10px; padding: 30px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-        .gold-card { border-top: 4px solid #d4af37; }
-        h1 { margin-top: 0; }
-        .notice-item { padding: 12px 0; border-bottom: 1px solid #f0f0f0; }
-        .notice-item:last-child { border-bottom: none; }
-        .deny-box { text-align: center; padding: 60px 20px; }
-        .deny-box .icon { font-size: 48px; margin-bottom: 10px; }
-        .deny-box h2 { color: #b91c1c; margin-bottom: 8px; }
-        .deny-box table { margin: 20px auto; border-collapse: collapse; }
-        .deny-box td { padding: 6px 14px; border: 1px solid #eee; font-size: 14px; }
-        .deny-box a.home-link { display: inline-block; margin-top: 20px; color: #4f46e5; text-decoration: none; font-weight: bold; }
-        [hidden] { display: none !important; }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>골드 등급 전용 — 모던 게시판</title>
+  <script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body>
-    <nav class="top-nav">
-        <div>
-            <a href="/">홈(게시판)</a>
-            <a href="/public-posts" style="color:#007bff;">부산 테마여행 목록</a>
-            <a href="/gold" style="color:#b8860b;">🥇 골드 전용 페이지</a>
-            <a href="/admin" style="color:#dc3545;">🛡 관리자 페이지</a>
-        </div>
-        <div id="auth-status">확인 중...</div>
-    </nav>
+<body class="bg-gray-50 text-gray-800 min-h-screen flex flex-col">
 
-    <div class="container">
-        <!-- 로딩 -->
-        <div id="loading-box" class="card" style="text-align:center; color:#888;">권한 확인 중입니다...</div>
+  {% include 'partials/_nav.html' %}
 
-        <!-- 골드 등급 이상만 보이는 화면 -->
-        <div id="content-box" class="card gold-card" hidden>
-            <h1>🥇 골드 전용 페이지</h1>
-            <p>이 화면은 <strong>골드 등급(중간 관리자) 이상</strong>만 접근할 수 있습니다.</p>
-            <div id="notice-list">불러오는 중...</div>
-        </div>
+  <main class="max-w-5xl mx-auto px-4 py-6 flex-1 w-full">
 
-        <!-- 권한 부족 / 미로그인 시 예외 화면 -->
-        <div id="deny-box" class="card deny-box" hidden>
-            <div class="icon">⛔</div>
-            <h2>접근 권한이 없습니다</h2>
-            <p id="deny-message">이 페이지는 골드 등급 이상만 접근할 수 있습니다.</p>
-            <table>
-                <tr><td>필요 등급</td><td><strong>골드(1)</strong> 이상</td></tr>
-                <tr><td>현재 등급</td><td id="deny-current-role"><strong>-</strong></td></tr>
-            </table>
-            <a class="home-link" href="/">← 홈으로 돌아가기</a>
-        </div>
+    <!-- 등급 확인 중 -->
+    <div id="loading-view" class="text-center py-20 text-gray-400 text-sm">
+      등급을 확인하는 중…
     </div>
 
-    <script>
-        const ROLE_LABELS = { 0: '일반', 1: '골드', 2: '관리자' };
-        const REQUIRED_ROLE = 1; // 골드 이상
+    <!-- 등급 부족 시 이 화면으로 바뀐다 -->
+    {% include 'partials/_denied.html' %}
 
-        async function checkAccess() {
-            const token = localStorage.getItem('token');
-            const authStatus = document.getElementById('auth-status');
-            const loadingBox = document.getElementById('loading-box');
-            const contentBox = document.getElementById('content-box');
-            const denyBox = document.getElementById('deny-box');
+    <!-- 골드 등급 이상만 보는 내용 -->
+    <div id="protected-view" class="hidden space-y-6">
 
-            if (!token) {
-                authStatus.innerHTML = `<span style="color:#888;">로그인이 필요합니다</span>`;
-                loadingBox.hidden = true;
-                document.getElementById('deny-message').innerText = '로그인 후 골드 등급 이상만 접근할 수 있습니다.';
-                document.getElementById('deny-current-role').innerHTML = '<strong>비로그인</strong>';
-                denyBox.hidden = false;
-                return;
-            }
+      <!-- 환영 배너 -->
+      <section class="rounded-2xl bg-gradient-to-r from-amber-400 to-yellow-500 text-white px-6 py-8 shadow-sm">
+        <div class="flex items-center gap-3">
+          <span class="text-4xl" aria-hidden="true">🏅</span>
+          <div>
+            <h2 class="text-2xl font-bold">골드 회원 전용 라운지</h2>
+            <p class="text-amber-50 text-sm mt-1">
+              환영합니다, <b id="gold-name">회원</b>님 ·
+              <span id="gold-role-badge" class="bg-white/25 px-2 py-0.5 rounded-full text-xs font-medium">골드</span>
+            </p>
+          </div>
+        </div>
+      </section>
 
-            try {
-                const res = await fetch('/api/auth/me', {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
+      <!-- 혜택 카드 -->
+      <section>
+        <h3 class="font-semibold mb-3">골드 등급 혜택</h3>
+        <div class="grid gap-4 sm:grid-cols-3">
+          <div class="bg-white rounded-xl shadow-sm p-5 border-t-4 border-amber-400">
+            <div class="text-2xl mb-2" aria-hidden="true">📂</div>
+            <h4 class="font-semibold text-sm">전용 자료 열람</h4>
+            <p class="text-xs text-gray-500 mt-1">골드 회원만 볼 수 있는 게시글을 읽을 수 있습니다.</p>
+          </div>
+          <div class="bg-white rounded-xl shadow-sm p-5 border-t-4 border-amber-400">
+            <div class="text-2xl mb-2" aria-hidden="true">⚡</div>
+            <h4 class="font-semibold text-sm">우선 문의 응대</h4>
+            <p class="text-xs text-gray-500 mt-1">문의를 남기면 일반 회원보다 먼저 답변을 받습니다.</p>
+          </div>
+          <div class="bg-white rounded-xl shadow-sm p-5 border-t-4 border-amber-400">
+            <div class="text-2xl mb-2" aria-hidden="true">🎟️</div>
+            <h4 class="font-semibold text-sm">이벤트 우선 참여</h4>
+            <p class="text-xs text-gray-500 mt-1">한정 이벤트에 먼저 신청할 수 있습니다.</p>
+          </div>
+        </div>
+      </section>
 
-                if (!res.ok) {
-                    // 토큰 만료/무효
-                    localStorage.removeItem('token');
-                    localStorage.removeItem('username');
-                    localStorage.removeItem('role');
-                    authStatus.innerHTML = `<span style="color:#888;">로그인이 필요합니다</span>`;
-                    loadingBox.hidden = true;
-                    document.getElementById('deny-message').innerText = '로그인이 만료되었습니다. 다시 로그인해주세요.';
-                    denyBox.hidden = false;
-                    return;
-                }
+      <!-- 골드 전용 게시글 -->
+      <section class="bg-white rounded-xl shadow-sm overflow-hidden">
+        <div class="p-4 flex items-center justify-between border-b border-gray-100">
+          <h3 class="font-semibold">골드 전용 게시글</h3>
+          <span class="text-xs text-gray-400">카테고리: 골드</span>
+        </div>
+        <div id="gold-posts" class="divide-y divide-gray-100">
+          <p class="px-4 py-8 text-center text-gray-400 text-sm">불러오는 중…</p>
+        </div>
+      </section>
 
-                const me = await res.json();
-                localStorage.setItem('username', me.username);
-                localStorage.setItem('role', me.role);
+      <p class="text-xs text-gray-400">
+        데이터 출처: <code>GET /api/gold/posts</code> — 이 API 는 서버에서도 골드 등급을 검사합니다.
+        (주소창에 직접 입력해도 등급이 없으면 403)
+      </p>
+    </div>
+  </main>
 
-                const badgeClass = `role-${me.role}`;
-                authStatus.innerHTML = `<strong>${me.username}</strong>님 <span class="role-badge ${badgeClass}">${me.role_label}</span> · <a href="#" onclick="logout()">로그아웃</a>`;
-                loadingBox.hidden = true;
+  <script>
+    const REQUIRED_ROLE = 'gold';
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g,
+      c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-                if (me.role >= REQUIRED_ROLE) {
-                    contentBox.hidden = false;
-                    loadGoldContent(token);
-                } else {
-                    document.getElementById('deny-message').innerText = '이 페이지는 골드 등급 이상만 접근할 수 있습니다.';
-                    document.getElementById('deny-current-role').innerHTML = `<strong>${me.role_label}(${me.role})</strong>`;
-                    denyBox.hidden = false;
-                }
-            } catch (e) {
-                loadingBox.innerText = '권한 확인 중 오류가 발생했습니다.';
-            }
+    const token = () => localStorage.getItem('token');
+    const authH = () => ({ 'Authorization': 'Bearer ' + token() });
+    const hide = (id) => document.getElementById(id).classList.add('hidden');
+
+    async function checkGrade() {
+      // ① 토큰이 아예 없으면 서버에 물어볼 것도 없다
+      if (!token()) {
+        hide('loading-view');
+        showDenied({ required: REQUIRED_ROLE, current: null });
+        return;
+      }
+
+      // ② 내 등급을 서버에 확인한다(토큰은 자동 전송되지 않으므로 직접 붙인다)
+      let me;
+      try {
+        const res = await fetch('/api/auth/me', { headers: authH() });
+        hide('loading-view');
+        if (res.status === 401) {       // 토큰 만료·위조
+          localStorage.removeItem('token');
+          localStorage.removeItem('username');
+          showDenied({ required: REQUIRED_ROLE, current: null });
+          return;
         }
+        me = await res.json();
+      } catch (e) {
+        hide('loading-view');
+        showDenied({ required: REQUIRED_ROLE, current: null,
+                     message: '서버와 통신하지 못했습니다. 잠시 후 다시 시도해 주세요.' });
+        return;
+      }
 
-        // 실제 골드 콘텐츠는 서버가 /api/gold/posts 에서 다시 등급을 검사한 뒤 내려준다.
-        // (화면 분기는 UX 일 뿐, 진짜 접근 제어는 여기 서버 응답이다.)
-        async function loadGoldContent(token) {
-            const noticeList = document.getElementById('notice-list');
-            try {
-                const res = await fetch('/api/gold/posts', {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-                if (!res.ok) {
-                    const err = await res.json().catch(() => ({}));
-                    noticeList.innerText = err.msg || '골드 콘텐츠를 불러오지 못했습니다.';
-                    return;
-                }
-                const data = await res.json();
-                noticeList.innerHTML = data.notices
-                    .map(n => `<div class="notice-item">${n}</div>`)
-                    .join('');
-            } catch (e) {
-                noticeList.innerText = '골드 콘텐츠를 불러오는 중 오류가 발생했습니다.';
-            }
-        }
+      // ③ 등급이 모자라면 예외 화면 (admin 은 gold 보다 높아 통과한다)
+      if (!me.is_gold) {
+        showDenied({ required: REQUIRED_ROLE, current: me.role });
+        return;
+      }
 
-        function logout() {
-            localStorage.removeItem('token');
-            localStorage.removeItem('username');
-            localStorage.removeItem('role');
-            location.href = '/';
-        }
+      document.getElementById('gold-name').textContent = me.username;
+      document.getElementById('gold-role-badge').textContent = me.role_label;
+      showProtected();
+      loadGoldPosts();
+    }
 
-        document.addEventListener('DOMContentLoaded', checkAccess);
-    </script>
+    async function loadGoldPosts() {
+      const box = document.getElementById('gold-posts');
+      const res = await fetch('/api/gold/posts', { headers: authH() });
+
+      if (!res.ok) {   // 서버가 막은 경우 — 화면만 뚫려도 데이터는 못 가져간다
+        const d = await res.json().catch(() => ({}));
+        showDenied({ required: d.required_role || REQUIRED_ROLE,
+                     current: d.current_role || null });
+        return;
+      }
+
+      const posts = (await res.json()).posts || [];
+      if (!posts.length) {
+        box.innerHTML = `<p class="px-4 py-10 text-center text-gray-400 text-sm">
+          아직 골드 전용 게시글이 없습니다.<br>
+          <span class="text-xs">게시판에서 카테고리를 '골드' 로 정해 글을 쓰면 여기에 모입니다.</span>
+        </p>`;
+        return;
+      }
+      box.innerHTML = posts.map(p => `
+        <article class="px-4 py-3 hover:bg-amber-50/40 transition">
+          <div class="flex items-center gap-2">
+            <span class="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 text-xs font-medium shrink-0">골드</span>
+            <h4 class="font-medium truncate">${esc(p.title)}</h4>
+          </div>
+          <p class="text-sm text-gray-500 mt-1 line-clamp-2">${esc(p.content)}</p>
+          <p class="text-xs text-gray-400 mt-1">${esc(p.author)}</p>
+        </article>`).join('');
+    }
+
+    checkGrade();
+  </script>
 </body>
 </html>
