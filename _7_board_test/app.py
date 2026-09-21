@@ -137,10 +137,16 @@ with app.app_context():
 
     if 'security_events' in inspector.get_table_names():
         existing_event_columns = [col['name'] for col in inspector.get_columns('security_events')]
-        if 'source' not in existing_event_columns:
-            with db.engine.connect() as conn:
-                conn.execute(text('ALTER TABLE security_events ADD COLUMN source VARCHAR(50) NULL'))
-                conn.commit()
+        event_column_adds = {
+            'source': 'ALTER TABLE security_events ADD COLUMN source VARCHAR(50) NULL',
+            'level': 'ALTER TABLE security_events ADD COLUMN level INTEGER NULL',
+            'rule': 'ALTER TABLE security_events ADD COLUMN rule VARCHAR(50) NULL',
+        }
+        with db.engine.connect() as conn:
+            for col_name, ddl in event_column_adds.items():
+                if col_name not in existing_event_columns:
+                    conn.execute(text(ddl))
+                    conn.commit()
 
 # ----------------- 인가(Authorization) 데코레이터 -----------------
 def role_required(min_role):
@@ -623,11 +629,11 @@ def create_security_event():
         student    = str(data["student"])[:80],
         src_ip     = str(data["src_ip"])[:45],
         decision   = data["decision"],
-        severity   = (data.get("severity") or None),
+        severity   = (data.get("severity") or "Low"),
         reason     = (str(data["reason"])[:255] if data.get("reason") else None),
         level      = _as_int(data.get("level")),
         rule       = (str(data["rule"])[:50] if data.get("rule") else None),
-        fail_count = _as_int(data.get("fail_count")),
+        fail_count = _as_int(data.get("fail_count")) or 0,
     )
     db.session.add(event)
     db.session.commit()
@@ -635,42 +641,57 @@ def create_security_event():
 
 @app.route('/api/security/events', methods=['GET'])
 def list_security_events():
-    """본인 기록만 최신순 조회 (인증 없음)."""
+    """이벤트 조회 (인증 없음). student 를 주면 본인 것만, 없으면 전체(대시보드용)."""
     student = request.args.get("student")
-    if not student:
-        return jsonify({"msg": "student 쿼리 파라미터가 필요합니다."}), 400
+    decision = request.args.get("decision")
+    limit = min(request.args.get("limit", default=20, type=int) or 20, 100)
 
-    rows = (SecurityEvent.query
-            .filter_by(student=student)
+    query = SecurityEvent.query
+    if student:
+        query = query.filter_by(student=student)
+    if decision in ("allow", "deny"):
+        query = query.filter_by(decision=decision)
+
+    rows = (query
             .order_by(SecurityEvent.created_at.desc(), SecurityEvent.id.desc())
-            .limit(100)
+            .limit(limit)
             .all())
     return jsonify({"student": student, "count": len(rows),
                     "events": [r.to_dict() for r in rows]}), 200
 
 @app.route('/api/security/events/summary', methods=['GET'])
 def security_event_summary():
-    """(심화 S1) 허용/거부 건수와 거부 상위 IP."""
+    """(심화 S1) 허용/거부 건수와 거부 상위 IP. student 없으면 전체 집계."""
     student = request.args.get("student")
-    if not student:
-        return jsonify({"msg": "student 쿼리 파라미터가 필요합니다."}), 400
 
-    counts = dict(
-        db.session.query(SecurityEvent.decision, db.func.count(SecurityEvent.id))
-        .filter_by(student=student).group_by(SecurityEvent.decision).all()
-    )
-    top_deny = (db.session.query(SecurityEvent.src_ip, db.func.count(SecurityEvent.id).label("c"))
-                .filter_by(student=student, decision="deny")
-                .group_by(SecurityEvent.src_ip)
+    q1 = db.session.query(SecurityEvent.decision, db.func.count(SecurityEvent.id))
+    q2 = (db.session.query(SecurityEvent.src_ip, db.func.sum(SecurityEvent.fail_count).label("c"))
+          .filter(SecurityEvent.decision == "deny"))
+    if student:
+        q1 = q1.filter(SecurityEvent.student == student)
+        q2 = q2.filter(SecurityEvent.student == student)
+
+    by_decision = dict(q1.group_by(SecurityEvent.decision).all())
+    top_deny = (q2.group_by(SecurityEvent.src_ip)
                 .order_by(db.desc("c"))
                 .limit(5).all())
     return jsonify({
         "student": student,
-        "allow": counts.get("allow", 0),
-        "deny": counts.get("deny", 0),
-        "total": sum(counts.values()),
-        "top_deny_ips": [{"src_ip": ip, "count": c} for ip, c in top_deny],
+        "by_decision": by_decision,
+        "top_deny_ips": [{"src_ip": ip, "fails": int(c or 0)} for ip, c in top_deny],
     }), 200
+
+@app.route('/api/security/students', methods=['GET'])
+def list_security_students():
+    """대시보드 드롭다운용 — 기록이 있는 학생 목록."""
+    rows = (db.session.query(SecurityEvent.student)
+            .distinct().order_by(SecurityEvent.student).all())
+    return jsonify({"students": [r[0] for r in rows]}), 200
+
+@app.route('/dashboard')
+def security_dashboard_page():
+    """보안 이벤트 대시보드 (n8n 이 저장한 허용/거부 기록)."""
+    return render_template('dashboard.html')
 
 
 # ----------------- 최초 관리자 부트스트랩용 CLI -----------------

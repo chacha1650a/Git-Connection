@@ -1,0 +1,72 @@
+{# 공통 헤더 — 데스크톱은 가로 메뉴, 모바일(md 미만)은 햄버거 메뉴 #}
+<header class="bg-white shadow-sm sticky top-0 z-20">
+  <div class="max-w-5xl mx-auto px-4">
+    <div class="flex justify-between items-center h-16">
+
+      <!-- 로고 -->
+      <a href="/" class="text-xl font-bold text-indigo-600 shrink-0">✨ 모던 게시판</a>
+
+      <!-- 데스크톱 메뉴 (md 이상에서만 보임) -->
+      <nav class="hidden md:flex items-center space-x-1">
+        <a href="/" class="px-3 py-2 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-100 transition">게시판</a>
+        <a href="/dashboard" class="px-3 py-2 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-100 transition">보안 대시보드</a>
+        <a href="/gold" class="px-3 py-2 rounded-lg text-sm font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 transition">🏅 골드등급</a>
+        <a href="/admin" class="px-3 py-2 rounded-lg text-sm font-medium text-red-700 hover:bg-red-50 transition">🔐 관리자</a>
+        <a href="/public-posts" class="px-3 py-2 rounded-lg text-sm font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 transition">부산 테마여행</a>
+        <span id="auth-nav" class="flex items-center space-x-2 ml-2"></span>
+      </nav>
+
+      <!-- 햄버거 버튼 (md 미만에서만 보임) -->
+      <button id="nav-toggle" type="button"
+              class="md:hidden inline-flex items-center justify-center p-2 rounded-lg text-gray-600 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              aria-label="메뉴 열기" aria-expanded="false" aria-controls="mobile-menu">
+        <svg id="icon-open" class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+        </svg>
+        <svg id="icon-close" class="w-6 h-6 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- 모바일 드롭다운 메뉴 -->
+    <nav id="mobile-menu" class="md:hidden hidden pb-3 space-y-1 border-t border-gray-100 pt-2">
+      <a href="/" class="block px-3 py-2 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-100">게시판</a>
+      <a href="/dashboard" class="block px-3 py-2 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-100">보안 대시보드</a>
+      <a href="/gold" class="block px-3 py-2 rounded-lg text-sm font-medium text-amber-700 bg-amber-50 hover:bg-amber-100">🏅 골드등급</a>
+      <a href="/admin" class="block px-3 py-2 rounded-lg text-sm font-medium text-red-700 hover:bg-red-50">🔐 관리자</a>
+      <a href="/public-posts" class="block px-3 py-2 rounded-lg text-sm font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100">부산 테마여행</a>
+      <span id="auth-nav-mobile" class="block px-3 py-2 space-x-2"></span>
+    </nav>
+  </div>
+</header>
+
+<script>
+  // 햄버거 토글 — 아이콘 교체 + aria-expanded 갱신(접근성)
+  (function () {
+    const btn = document.getElementById('nav-toggle');
+    const menu = document.getElementById('mobile-menu');
+    const iconOpen = document.getElementById('icon-open');
+    const iconClose = document.getElementById('icon-close');
+    if (!btn || !menu) return;
+
+    btn.addEventListener('click', function () {
+      const willOpen = menu.classList.contains('hidden');
+      menu.classList.toggle('hidden', !willOpen);
+      iconOpen.classList.toggle('hidden', willOpen);
+      iconClose.classList.toggle('hidden', !willOpen);
+      btn.setAttribute('aria-expanded', String(willOpen));
+      btn.setAttribute('aria-label', willOpen ? '메뉴 닫기' : '메뉴 열기');
+    });
+
+    // 데스크톱 폭으로 넓어지면 모바일 메뉴는 닫아 둔다
+    window.addEventListener('resize', function () {
+      if (window.innerWidth >= 768 && !menu.classList.contains('hidden')) {
+        menu.classList.add('hidden');
+        iconOpen.classList.remove('hidden');
+        iconClose.classList.add('hidden');
+        btn.setAttribute('aria-expanded', 'false');
+      }
+    });
+  })();
+</script>

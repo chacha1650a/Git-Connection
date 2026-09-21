@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>보안 대시보드 — 로그인 경보</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 text-gray-800 min-h-screen flex flex-col">
+
+  {% include 'partials/_nav.html' %}
+
+  <main class="max-w-5xl mx-auto px-4 py-6 flex-1 w-full">
+
+    <div class="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 mb-6">
+      <div>
+        <h2 class="text-2xl font-bold">🛡️ 보안 대시보드</h2>
+        <p class="text-sm text-gray-500 mt-1">n8n 이 판정해 보낸 허용/거부 기록</p>
+      </div>
+      <div class="flex gap-2 items-center">
+        <select id="student-filter"
+                class="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+          <option value="">전체 학생</option>
+        </select>
+        <button id="refresh-btn"
+                class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition">
+          새로고침
+        </button>
+      </div>
+    </div>
+
+    <!-- 요약 카드 -->
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+      <div class="bg-white rounded-xl shadow-sm p-4">
+        <div class="text-xs text-gray-500">전체</div>
+        <div id="stat-total" class="text-2xl font-bold mt-1">-</div>
+      </div>
+      <div class="bg-white rounded-xl shadow-sm p-4 border-l-4 border-red-500">
+        <div class="text-xs text-gray-500">거부 (deny)</div>
+        <div id="stat-deny" class="text-2xl font-bold mt-1 text-red-600">-</div>
+      </div>
+      <div class="bg-white rounded-xl shadow-sm p-4 border-l-4 border-emerald-500">
+        <div class="text-xs text-gray-500">허용 (allow)</div>
+        <div id="stat-allow" class="text-2xl font-bold mt-1 text-emerald-600">-</div>
+      </div>
+      <div class="bg-white rounded-xl shadow-sm p-4">
+        <div class="text-xs text-gray-500">최다 거부 IP</div>
+        <div id="stat-top-ip" class="text-lg font-bold mt-1 truncate">-</div>
+      </div>
+    </div>
+
+    <!-- 거부 상위 IP -->
+    <section class="bg-white rounded-xl shadow-sm p-4 mb-6">
+      <h3 class="font-semibold mb-3">거부 상위 IP</h3>
+      <div id="top-ips" class="space-y-2 text-sm text-gray-500">불러오는 중…</div>
+    </section>
+
+    <!-- 최근 이벤트 -->
+    <section class="bg-white rounded-xl shadow-sm overflow-hidden">
+      <div class="p-4 flex items-center justify-between">
+        <h3 class="font-semibold">최근 이벤트</h3>
+        <div class="flex gap-1 text-xs">
+          <button data-decision="" class="filter-btn px-2 py-1 rounded bg-indigo-600 text-white">전체</button>
+          <button data-decision="deny" class="filter-btn px-2 py-1 rounded bg-gray-100 hover:bg-gray-200">거부</button>
+          <button data-decision="allow" class="filter-btn px-2 py-1 rounded bg-gray-100 hover:bg-gray-200">허용</button>
+        </div>
+      </div>
+      <!-- 표는 좁은 화면에서 가로 스크롤 -->
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm whitespace-nowrap">
+          <thead class="bg-gray-50 text-gray-600">
+            <tr>
+              <th class="text-left px-4 py-2 font-medium">#</th>
+              <th class="text-left px-4 py-2 font-medium">학생</th>
+              <th class="text-left px-4 py-2 font-medium">출발지 IP</th>
+              <th class="text-left px-4 py-2 font-medium">판정</th>
+              <th class="text-left px-4 py-2 font-medium">심각도</th>
+              <th class="text-left px-4 py-2 font-medium">횟수</th>
+              <th class="text-left px-4 py-2 font-medium">사유</th>
+              <th class="text-left px-4 py-2 font-medium">저장 시각</th>
+            </tr>
+          </thead>
+          <tbody id="event-rows" class="divide-y divide-gray-100">
+            <tr><td colspan="8" class="px-4 py-6 text-center text-gray-400">불러오는 중…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <p class="text-xs text-gray-400 mt-4">
+      데이터 출처: <code>GET /api/security/events</code> · <code>GET /api/security/events/summary</code>
+      — n8n 워크플로우가 <code>POST /api/security/events</code> 로 저장한 기록입니다.
+    </p>
+  </main>
+
+  <script>
+    let currentDecision = '';
+
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g,
+      c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+    const badge = (decision) => decision === 'deny'
+      ? '<span class="px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-xs font-medium">🚫 거부</span>'
+      : '<span class="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-xs font-medium">✅ 허용</span>';
+
+    const sevColor = (s) => ({ High: 'text-red-600', Medium: 'text-amber-600' }[s] || 'text-gray-500');
+
+    function studentParam() {
+      const v = document.getElementById('student-filter').value;
+      return v ? `student=${encodeURIComponent(v)}` : '';
+    }
+
+    async function loadStudents() {
+      try {
+        const r = await fetch('/api/security/students');
+        const d = await r.json();
+        const sel = document.getElementById('student-filter');
+        const keep = sel.value;
+        sel.innerHTML = '<option value="">전체 학생</option>' +
+          (d.students || []).map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+        sel.value = keep;
+      } catch (e) { /* 목록 실패는 무시 */ }
+    }
+
+    async function loadSummary() {
+      const qs = studentParam();
+      const r = await fetch('/api/security/events/summary' + (qs ? '?' + qs : ''));
+      const d = await r.json();
+      const deny = d.by_decision?.deny || 0;
+      const allow = d.by_decision?.allow || 0;
+      document.getElementById('stat-deny').textContent = deny;
+      document.getElementById('stat-allow').textContent = allow;
+      document.getElementById('stat-total').textContent = deny + allow;
+
+      const tops = d.top_deny_ips || [];
+      document.getElementById('stat-top-ip').textContent = tops.length ? tops[0].src_ip : '-';
+      document.getElementById('top-ips').innerHTML = tops.length
+        ? tops.map(t => `
+            <div class="flex items-center gap-3">
+              <span class="font-mono text-gray-800 w-36 shrink-0">${esc(t.src_ip)}</span>
+              <div class="flex-1 bg-gray-100 rounded-full h-2 overflow-hidden">
+                <div class="bg-red-500 h-2" style="width:${Math.min(100, (t.fails / tops[0].fails) * 100)}%"></div>
+              </div>
+              <span class="text-gray-600 w-16 text-right">${t.fails}회</span>
+            </div>`).join('')
+        : '<div class="text-gray-400">거부 기록이 없습니다.</div>';
+    }
+
+    async function loadEvents() {
+      const parts = [studentParam(), currentDecision ? `decision=${currentDecision}` : '', 'limit=50']
+        .filter(Boolean).join('&');
+      const r = await fetch('/api/security/events?' + parts);
+      const d = await r.json();
+      const tbody = document.getElementById('event-rows');
+      if (!d.events || d.events.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" class="px-4 py-6 text-center text-gray-400">기록이 없습니다.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = d.events.map(e => `
+        <tr class="hover:bg-gray-50">
+          <td class="px-4 py-2 text-gray-400">${e.id}</td>
+          <td class="px-4 py-2 font-medium">${esc(e.student)}</td>
+          <td class="px-4 py-2 font-mono">${esc(e.src_ip)}</td>
+          <td class="px-4 py-2">${badge(e.decision)}</td>
+          <td class="px-4 py-2 font-medium ${sevColor(e.severity)}">${esc(e.severity)}</td>
+          <td class="px-4 py-2">${e.fail_count}</td>
+          <td class="px-4 py-2 text-gray-600 max-w-xs truncate" title="${esc(e.reason)}">${esc(e.reason)}</td>
+          <td class="px-4 py-2 text-gray-400">${esc((e.created_at || '').replace('T', ' ').slice(0, 19))}</td>
+        </tr>`).join('');
+    }
+
+    function reload() { loadSummary(); loadEvents(); }
+
+    document.getElementById('refresh-btn').addEventListener('click', () => { loadStudents(); reload(); });
+    document.getElementById('student-filter').addEventListener('change', reload);
+    document.querySelectorAll('.filter-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        currentDecision = btn.dataset.decision;
+        document.querySelectorAll('.filter-btn').forEach(b => {
+          b.className = 'filter-btn px-2 py-1 rounded ' +
+            (b === btn ? 'bg-indigo-600 text-white' : 'bg-gray-100 hover:bg-gray-200');
+        });
+        loadEvents();
+      });
+    });
+
+    loadStudents();
+    reload();
+  </script>
+</body>
+</html>
