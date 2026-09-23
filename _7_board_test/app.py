@@ -17,18 +17,10 @@ from sqlalchemy import inspect, text
 
 from config import Config
 from controllers import all_blueprints
+from controllers.rbac import client_ip
 from extensions import db, jwt
 from models import BlockedIP, User
 from models.user import ROLE_GENERAL, ROLE_LABELS
-
-
-def _client_ip():
-    """요청의 실제 클라이언트 IP. 프록시(n8n·nginx) 뒤면 X-Forwarded-For 첫 홉을 신뢰.
-    (랩 한정 규칙 — 실서비스는 신뢰 프록시 목록으로 검증해야 스푸핑을 막는다.)"""
-    xff = request.headers.get('X-Forwarded-For', '')
-    if xff:
-        return xff.split(',')[0].strip()
-    return request.remote_addr or ''
 
 
 def _ensure_schema():
@@ -86,7 +78,7 @@ def create_app(config_class=Config):
           캐시(예: Redis)나 방화벽(nftables) 계층으로 올려야 한다."""
         if request.path.startswith('/api/admin'):
             return None
-        ip = _client_ip()
+        ip = client_ip()
         if ip and db.session.get(BlockedIP, ip):
             return jsonify({"msg": "차단된 IP 입니다(관리자에게 문의).", "ip": ip, "blocked": True}), 403
         return None

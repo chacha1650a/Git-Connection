@@ -55,6 +55,29 @@
       <div id="top-ips" class="space-y-2 text-sm text-gray-500">불러오는 중…</div>
     </section>
 
+    <!-- 차단된 IP (관리자 로그인 시에만 조회 — /api/admin/blocked 는 서버가 admin 을 강제) -->
+    <section class="bg-white rounded-xl shadow-sm overflow-hidden mb-6">
+      <div class="p-4 flex items-center justify-between">
+        <h3 class="font-semibold">⛔ 차단된 IP <span id="blocked-count" class="text-sm text-gray-400 font-normal"></span></h3>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm whitespace-nowrap">
+          <thead class="bg-gray-50 text-gray-600">
+            <tr>
+              <th class="text-left px-4 py-2 font-medium">IP</th>
+              <th class="text-left px-4 py-2 font-medium">사유</th>
+              <th class="text-left px-4 py-2 font-medium">차단 주체</th>
+              <th class="text-left px-4 py-2 font-medium">차단 시각</th>
+              <th class="px-4 py-2"></th>
+            </tr>
+          </thead>
+          <tbody id="blocked-rows" class="divide-y divide-gray-100">
+            <tr><td colspan="5" class="px-4 py-6 text-center text-gray-400">불러오는 중…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
     <!-- 최근 이벤트 -->
     <section class="bg-white rounded-xl shadow-sm overflow-hidden">
       <div class="p-4 flex items-center justify-between">
@@ -88,7 +111,7 @@
     </section>
 
     <p class="text-xs text-gray-400 mt-4">
-      데이터 출처: <code>GET /api/security/events</code> · <code>GET /api/security/events/summary</code>
+      데이터 출처: <code>GET /api/security/events</code> · <code>GET /api/security/events/summary</code> · <code>GET /api/admin/blocked</code>(관리자)
       — n8n 워크플로우가 <code>POST /api/security/events</code> 로 저장한 기록입니다.
     </p>
   </main>
@@ -146,6 +169,14 @@
         : '<div class="text-gray-400">거부 기록이 없습니다.</div>';
     }
 
+    // 서버는 UTC('...Z')로 내려주므로 한국 시간으로 바꿔 표시한다.
+    function kst(iso) {
+      if (!iso) return '';
+      const d = new Date(iso);
+      if (isNaN(d)) return iso;
+      return d.toLocaleString('sv-SE', { timeZone: 'Asia/Seoul' });
+    }
+
     async function loadEvents() {
       const parts = [studentParam(), currentDecision ? `decision=${currentDecision}` : '', 'limit=50']
         .filter(Boolean).join('&');
@@ -165,11 +196,56 @@
           <td class="px-4 py-2 font-medium ${sevColor(e.severity)}">${esc(e.severity)}</td>
           <td class="px-4 py-2">${e.fail_count}</td>
           <td class="px-4 py-2 text-gray-600 max-w-xs truncate" title="${esc(e.reason)}">${esc(e.reason)}</td>
-          <td class="px-4 py-2 text-gray-400">${esc((e.created_at || '').replace('T', ' ').slice(0, 19))}</td>
+          <td class="px-4 py-2 text-gray-400">${esc(kst(e.created_at))}</td>
         </tr>`).join('');
     }
 
-    function reload() { loadSummary(); loadEvents(); }
+    const authHeaders = () => {
+      const t = localStorage.getItem('token');
+      return t ? { 'Authorization': 'Bearer ' + t } : {};
+    };
+
+    async function loadBlocked() {
+      const tbody = document.getElementById('blocked-rows');
+      const count = document.getElementById('blocked-count');
+      const msgRow = (m) => `<tr><td colspan="5" class="px-4 py-6 text-center text-gray-400">${m}</td></tr>`;
+      count.textContent = '';
+      if (!localStorage.getItem('token')) { tbody.innerHTML = msgRow('관리자로 로그인하면 차단 목록이 보입니다.'); return; }
+      try {
+        const r = await fetch('/api/admin/blocked', { headers: authHeaders() });
+        if (r.status === 401 || r.status === 422) { tbody.innerHTML = msgRow('로그인이 만료되었습니다. 다시 로그인해주세요.'); return; }
+        if (r.status === 403) { tbody.innerHTML = msgRow('관리자 등급만 차단 목록을 볼 수 있습니다.'); return; }
+        const d = await r.json();
+        count.textContent = `(${d.count}건)`;
+        if (!d.blocked || d.blocked.length === 0) { tbody.innerHTML = msgRow('차단된 IP 가 없습니다.'); return; }
+        tbody.innerHTML = d.blocked.map(b => `
+          <tr class="hover:bg-gray-50">
+            <td class="px-4 py-2 font-mono text-red-700">${esc(b.ip)}</td>
+            <td class="px-4 py-2 text-gray-600 max-w-xs truncate" title="${esc(b.reason)}">${esc(b.reason)}</td>
+            <td class="px-4 py-2">${esc(b.blocked_by)}</td>
+            <td class="px-4 py-2 text-gray-400">${esc(kst(b.blocked_at))}</td>
+            <td class="px-4 py-2 text-right">
+              <button data-ip="${esc(b.ip)}" class="unblock-btn px-2 py-1 rounded text-xs bg-gray-100 hover:bg-gray-200">차단 해제</button>
+            </td>
+          </tr>`).join('');
+      } catch (e) { tbody.innerHTML = msgRow('차단 목록을 불러오지 못했습니다.'); }
+    }
+
+    document.getElementById('blocked-rows').addEventListener('click', async (ev) => {
+      const btn = ev.target.closest('.unblock-btn');
+      if (!btn) return;
+      const ip = btn.dataset.ip;
+      if (!confirm(`${ip} 차단을 해제할까요?`)) return;
+      const r = await fetch('/api/admin/unblock', {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip }),
+      });
+      if (!r.ok) alert('차단 해제 실패 (' + r.status + ')');
+      loadBlocked();
+    });
+
+    function reload() { loadSummary(); loadEvents(); loadBlocked(); }
 
     document.getElementById('refresh-btn').addEventListener('click', () => { loadStudents(); reload(); });
     document.getElementById('student-filter').addEventListener('change', reload);

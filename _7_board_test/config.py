@@ -45,3 +45,7 @@ class Config:
 
     PUBLIC_API_KEY = PUBLIC_API_KEY
     PUBLIC_API_URL = PUBLIC_API_URL
+
+    # ── Graylog GELF (앱이 로그인 실패 등 보안 로그를 SIEM 으로 전송) ──
+    GELF_HOST = os.getenv('GELF_HOST', 'localhost')
+    GELF_PORT = int(os.getenv('GELF_PORT', '12201'))
