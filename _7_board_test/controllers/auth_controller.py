@@ -7,6 +7,9 @@ from extensions import db
 from models import User
 from models.user import ROLE_GENERAL, ROLE_LABELS
 
+from .gelf import send_gelf
+from .rbac import client_ip
+
 auth_bp = Blueprint('auth', __name__, url_prefix='/api/auth')
 
 
@@ -38,7 +41,12 @@ def login():
     password = data.get('password')
 
     user = User.query.filter_by(username=username).first()
-    if not user or not check_password_hash(user.password, password):
+    if not user or not check_password_hash(user.password, password or ''):
+        # 인증 실패 → Graylog 로 신고. 집계(5회)·차단은 Graylog 이벤트 → n8n → /api/admin/block 이 맡는다.
+        src_ip = client_ip() or '0.0.0.0'
+        send_gelf(f"failed login for '{username}' from {src_ip}",
+                  rule='login-bruteforce', username=username or '(unknown)',
+                  src_ip=src_ip, count=1)
         return jsonify({"msg": "아이디 또는 비밀번호가 올바르지 않습니다."}), 401
 
     access_token = create_access_token(identity=str(user.id))

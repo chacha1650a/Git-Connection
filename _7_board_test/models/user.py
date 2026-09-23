@@ -1,3 +1,5 @@
+from sqlalchemy.types import Integer, TypeDecorator
+
 from extensions import db
 
 # ----------------- 등급(권한) 정의 (과제: 접근 제어 테스트) -----------------
@@ -6,6 +8,23 @@ ROLE_GENERAL = 0
 ROLE_GOLD = 1
 ROLE_ADMIN = 2
 ROLE_LABELS = {ROLE_GENERAL: '일반', ROLE_GOLD: '골드', ROLE_ADMIN: '관리자'}
+_ROLE_NAMES = {'user': ROLE_GENERAL, 'gold': ROLE_GOLD, 'admin': ROLE_ADMIN}
+
+
+class RoleInt(TypeDecorator):
+    """DB 의 role 칼럼이 원본 앱이 만든 VARCHAR('2', 'user' 등)여도 항상 int 로 읽는다."""
+    impl = Integer
+    cache_ok = True
+
+    def process_result_value(self, value, dialect):
+        if value is None or isinstance(value, int):
+            return value
+        if value in _ROLE_NAMES:
+            return _ROLE_NAMES[value]
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return ROLE_GENERAL
 
 
 class User(db.Model):
@@ -14,7 +33,7 @@ class User(db.Model):
     username = db.Column(db.String(80), unique=True, nullable=False)
     password = db.Column(db.String(255), nullable=False)
     # 0=일반(기본, 최초 가입), 1=골드(중간 관리자), 2=관리자
-    role = db.Column(db.Integer, nullable=False, default=ROLE_GENERAL)
+    role = db.Column(RoleInt, nullable=False, default=ROLE_GENERAL)
     # 권한 부여/회수 감사 추적용 (누가, 언제, 왜 이 등급을 줬는지)
     role_granted_by = db.Column(db.String(80), nullable=True)
     role_granted_at = db.Column(db.DateTime, nullable=True)

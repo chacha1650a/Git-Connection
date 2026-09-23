@@ -17,6 +17,15 @@ from models import User
 from models.user import ROLE_ADMIN, ROLE_LABELS
 
 
+def client_ip():
+    """요청의 실제 클라이언트 IP. 프록시(n8n·nginx) 뒤면 X-Forwarded-For 첫 홉을 신뢰.
+    (랩 한정 규칙 — 실서비스는 신뢰 프록시 목록으로 검증해야 스푸핑을 막는다.)"""
+    xff = request.headers.get('X-Forwarded-For', '')
+    if xff:
+        return xff.split(',')[0].strip()
+    return request.remote_addr or ''
+
+
 def role_required(min_role):
     """로그인 + 최소 등급(min_role) 이상만 통과시킨다. (인증 실패 401, 인가 실패 403)"""
     def decorator(fn):
