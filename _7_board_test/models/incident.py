@@ -21,8 +21,8 @@ class Incident(db.Model):
   event_count = db.Column(db.Integer, default=0)  # 취합한 security_events 개수
   actions = db.Column(db.String(255))   # 취해진 조치 요약(deny/allow, 잠금/차단 등)
   student = db.Column(db.String(50))
-  created_at = db.Column(db.DateTime, default=datetime.now)
-  updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
+  created_at = db.Column(db.DateTime, default=datetime.utcnow)
+  updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
   closed_at = db.Column(db.DateTime)
 
   def to_dict(self):

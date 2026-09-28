@@ -10,7 +10,7 @@ import hmac
 from flask import Blueprint, current_app, jsonify, request
 
 from extensions import db
-from models import SecurityEvent
+from models import Incident, SecurityEvent
 
 security_bp = Blueprint('security', __name__, url_prefix='/api/security')
 
@@ -112,6 +112,45 @@ def security_event_summary():
         "student": student,
         "by_decision": by_decision,
         "top_deny_ips": [{"src_ip": ip, "fails": int(c or 0)} for ip, c in top_deny],
+    }), 200
+
+
+@security_bp.route('/incidents', methods=['GET'])
+def list_security_incidents():
+    """인시던트 티켓 목록 — 조회는 키 없이(대시보드가 쓴다).
+
+    생성/종료는 그대로 관리자 키/JWT 가 필요한 /api/admin/incident 쪽이다(읽기 전용).
+    ?status=open|closed · ?student= · ?limit=(최대 100)
+    """
+    status = request.args.get("status")
+    student = request.args.get("student")
+    limit = min(request.args.get("limit", default=20, type=int) or 20, 100)
+
+    query = Incident.query
+    if status in ("open", "closed"):
+        query = query.filter_by(status=status)
+    if student:
+        query = query.filter_by(student=student)
+
+    rows = query.order_by(Incident.id.desc()).limit(limit).all()
+    return jsonify({"count": len(rows), "incidents": [r.to_dict() for r in rows]}), 200
+
+
+@security_bp.route('/incidents/summary', methods=['GET'])
+def security_incidents_summary():
+    """상태별 티켓 수 + 열린 티켓의 심각도 분포(대시보드 카드용)."""
+    student = request.args.get("student")
+
+    q1 = db.session.query(Incident.status, db.func.count(Incident.id))
+    q2 = (db.session.query(Incident.severity, db.func.count(Incident.id))
+          .filter(Incident.status == "open"))
+    if student:
+        q1 = q1.filter(Incident.student == student)
+        q2 = q2.filter(Incident.student == student)
+
+    return jsonify({
+        "by_status": dict(q1.group_by(Incident.status).all()),
+        "open_by_severity": dict(q2.group_by(Incident.severity).all()),
     }), 200
 
 

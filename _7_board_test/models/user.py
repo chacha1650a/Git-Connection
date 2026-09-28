@@ -39,6 +39,14 @@ class User(db.Model):
     role_granted_at = db.Column(db.DateTime, nullable=True)
     role_reason = db.Column(db.String(200), nullable=True)
 
+    # ----------------- 계정 잠금(account lockout) — 브루트포스 대응 -----------------
+    # 로그인 실패가 임계 초과하면 n8n(SOAR)이 /api/admin/lock 을 호출해 잠근다.
+    # 잠긴 계정은 비밀번호가 맞아도 로그인 거부(423).
+    is_locked = db.Column(db.Boolean, nullable=False, default=False)
+    locked_at = db.Column(db.DateTime, nullable=True)
+    lock_reason = db.Column(db.String(200), nullable=True)
+    failed_logins = db.Column(db.Integer, nullable=False, default=0)  # 표시용(성공 시 0)
+
     def to_dict(self):
         return {
             "id": self.id,
@@ -48,4 +56,8 @@ class User(db.Model):
             "role_granted_by": self.role_granted_by,
             "role_granted_at": self.role_granted_at.isoformat() + "Z" if self.role_granted_at else None,
             "role_reason": self.role_reason,
+            "is_locked": self.is_locked,
+            "locked_at": self.locked_at.isoformat() + "Z" if self.locked_at else None,
+            "lock_reason": self.lock_reason,
+            "failed_logins": self.failed_logins,
         }

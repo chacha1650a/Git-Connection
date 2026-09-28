@@ -41,13 +41,28 @@ def login():
     password = data.get('password')
 
     user = User.query.filter_by(username=username).first()
+    src_ip = client_ip() or '0.0.0.0'
+
+    # ① 이미 잠긴 계정은 비밀번호가 맞아도 거부(423 Locked)
+    if user and user.is_locked:
+        send_gelf(f"login attempt on LOCKED account '{username}'",
+                  rule='login-bruteforce', username=username, src_ip=src_ip, locked='1')
+        return jsonify({"msg": "계정이 잠겨 있습니다. 관리자에게 문의하세요.",
+                        "locked": True}), 423
+
     if not user or not check_password_hash(user.password, password or ''):
-        # 인증 실패 → Graylog 로 신고. 집계(5회)·차단은 Graylog 이벤트 → n8n → /api/admin/block 이 맡는다.
-        src_ip = client_ip() or '0.0.0.0'
+        # 인증 실패 → Graylog 로 신고. 집계(5회)·잠금은 Graylog 이벤트 → n8n → /api/admin/lock 이 맡는다.
+        if user:
+            user.failed_logins = (user.failed_logins or 0) + 1
+            db.session.commit()
         send_gelf(f"failed login for '{username}' from {src_ip}",
                   rule='login-bruteforce', username=username or '(unknown)',
                   src_ip=src_ip, count=1)
         return jsonify({"msg": "아이디 또는 비밀번호가 올바르지 않습니다."}), 401
+
+    if user.failed_logins:
+        user.failed_logins = 0
+        db.session.commit()
 
     access_token = create_access_token(identity=str(user.id))
     return jsonify({

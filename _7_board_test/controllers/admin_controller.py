@@ -4,12 +4,12 @@
   ① 기계 호출(n8n·회수봇)  : 헤더  X-API-Key: <ADMIN_API_KEY>
   ② 사람(관리자 페이지)     : JWT(로그인 토큰) + 그 계정의 role == 관리자(2)
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from flask import Blueprint, current_app, g, jsonify, request
 
 from extensions import db
-from models import BlockedIP, Post, SecurityEvent, User
+from models import BlockedIP, Incident, Post, SecurityEvent, User
 from models.user import ROLE_ADMIN, ROLE_GENERAL, ROLE_GOLD, ROLE_LABELS
 
 from .rbac import admin_required
@@ -86,6 +86,65 @@ def admin_grant():
         "old_role": old_role,
         "new_role": new_role,
     }), 200
+
+
+@admin_bp.route('/lock', methods=['POST'])
+@admin_required
+def admin_lock_account():
+    """계정 잠금(브루트포스 대응) → is_locked=True. n8n 이 호출.
+    body: {username, reason, student, src_ip, fail_count, severity}
+    잠금이 실제로 일어나면 security_events 에 감사기록(source='login-guard')을 남긴다."""
+    data = request.get_json(silent=True) or {}
+    username = (data.get('username') or '').strip()
+    if not username:
+        return jsonify({"msg": "username 은 필수입니다."}), 400
+    user = User.query.filter_by(username=username).first()
+    if not user:
+        return jsonify({"msg": f"없는 사용자: {username}"}), 404
+
+    actor = g.get('admin_actor', 'apikey')
+    if user.is_locked:
+        return jsonify({"msg": "이미 잠긴 계정", "username": username,
+                        "locked": True, "changed": False}), 200
+
+    reason = (data.get('reason') or f'브루트포스 자동 잠금 by {actor}')[:200]
+    user.is_locked = True
+    user.locked_at = datetime.utcnow()
+    user.lock_reason = reason
+    event = SecurityEvent(
+        student=str(data.get('student') or actor)[:80],
+        src_ip=str(data.get('src_ip') or '0.0.0.0')[:45],
+        decision='deny',
+        severity=(data.get('severity') or 'High'),
+        reason=f'계정 잠금: {username} ({reason})'[:255],
+        rule='login-bruteforce',
+        source=(data.get('source') or 'login-guard'),
+        fail_count=int(data.get('fail_count') or 0),
+    )
+    db.session.add(event)
+    db.session.commit()
+    return jsonify({"msg": "계정 잠금 완료", "username": username, "locked": True,
+                    "changed": True, "event_id": event.id, "locked_by": actor}), 200
+
+
+@admin_bp.route('/unlock', methods=['POST'])
+@admin_required
+def admin_unlock_account():
+    """계정 잠금 해제 → is_locked=False + 실패 카운트 초기화. body: {username}"""
+    data = request.get_json(silent=True) or {}
+    username = (data.get('username') or '').strip()
+    if not username:
+        return jsonify({"msg": "username 은 필수입니다."}), 400
+    user = User.query.filter_by(username=username).first()
+    if not user:
+        return jsonify({"msg": f"없는 사용자: {username}"}), 404
+
+    user.is_locked = False
+    user.failed_logins = 0
+    user.lock_reason = None
+    db.session.commit()
+    return jsonify({"msg": "잠금 해제 완료", "username": username, "locked": False,
+                    "unlocked_by": g.get('admin_actor', 'apikey')}), 200
 
 
 @admin_bp.route('/revoke', methods=['POST'])
@@ -242,3 +301,108 @@ def admin_list_blocked():
     """차단된 IP 목록."""
     rows = BlockedIP.query.order_by(BlockedIP.blocked_at.desc()).all()
     return jsonify({"count": len(rows), "blocked": [r.to_dict() for r in rows]}), 200
+
+
+# ----------------- 인시던트(Incident) 티켓 API -----------------
+_SEV_RANK = {'Low': 1, 'Medium': 2, 'High': 3, 'Critical': 4}
+
+
+def _build_incident_summary(src_ip, events):
+    """security_events 를 사람이 읽는 인시던트 요약(타임라인·집계·조치)으로 취합."""
+    by_source, actions = {}, set()
+    worst = 'Low'
+    lines = []
+    for e in events:
+        by_source[e.source] = by_source.get(e.source, 0) + 1
+        if e.decision:
+            actions.add(e.decision)
+        if _SEV_RANK.get(e.severity, 1) > _SEV_RANK.get(worst, 1):
+            worst = e.severity
+        when = e.created_at.strftime('%Y-%m-%d %H:%M:%S') if e.created_at else '?'
+        lines.append(f"- {when} [{e.severity}/{e.source}] {e.reason or ''}")
+    first = events[-1].created_at if events else None
+    last = events[0].created_at if events else None
+    src_summary = ', '.join(f'{k}×{v}' for k, v in sorted(by_source.items()))
+    summary = (
+        f"[인시던트 요약] 출발지 {src_ip}\n"
+        f"- 관련 이벤트: {len(events)}건 ({src_summary})\n"
+        f"- 최초/최종: {first} ~ {last}\n"
+        f"- 취해진 조치: {', '.join(sorted(actions)) or '없음'}\n"
+        f"- 최고 심각도: {worst}\n"
+        f"[타임라인]\n" + "\n".join(lines[:20])
+    )
+    return summary, worst, (', '.join(sorted(actions)) or '없음'), len(events)
+
+
+@admin_bp.route('/incident', methods=['POST'])
+@admin_required
+def admin_create_incident():
+    """인시던트 티켓 생성/갱신. body: {src_ip, title?, severity?, student?, hours?}
+
+    같은 src_ip 의 '열린' 티켓이 있으면 갱신(중복 방지), 없으면 새로 만든다.
+    요약은 최근 hours(기본 24) 시간의 security_events 를 자동 취합한다."""
+    data = request.get_json(silent=True) or {}
+    src_ip = (data.get('src_ip') or data.get('ip') or '').strip()
+    if not src_ip:
+        return jsonify({"msg": "src_ip 는 필수입니다."}), 400
+    actor = g.get('admin_actor', 'apikey')
+    hours = int(data.get('hours') or 24)
+    since = datetime.utcnow() - timedelta(hours=hours)
+
+    last_closed = (Incident.query
+                   .filter(Incident.src_ip == src_ip, Incident.status == 'closed',
+                           Incident.closed_at.isnot(None))
+                   .order_by(Incident.closed_at.desc()).first())
+    if last_closed and last_closed.closed_at > since:
+        since = last_closed.closed_at
+
+    events = (SecurityEvent.query
+              .filter(SecurityEvent.src_ip == src_ip, SecurityEvent.created_at >= since)
+              .order_by(SecurityEvent.created_at.desc()).all())
+    summary, worst, actions, cnt = _build_incident_summary(src_ip, events)
+    severity = data.get('severity') or worst
+    title = (data.get('title') or f'보안 인시던트: {src_ip} ({cnt}건)')[:200]
+
+    inc = Incident.query.filter_by(src_ip=src_ip, status='open').first()
+    created = False
+    if not inc:
+        inc = Incident(src_ip=src_ip, status='open', title=title)
+        db.session.add(inc)
+        created = True
+    inc.title = title
+    # 심각도는 내려가지 않는다: 요청값·취합 최고값·기존 티켓 값 중 가장 높은 것
+    inc.severity = max((severity, worst, inc.severity or 'Low'),
+                       key=lambda s: _SEV_RANK.get(s, 0))
+    inc.summary = summary
+    inc.event_count = cnt
+    inc.actions = actions[:255]
+    inc.student = (data.get('student') or actor)[:50]
+    db.session.commit()
+    return jsonify({"msg": "인시던트 생성" if created else "인시던트 갱신",
+                    "created": created, "incident": inc.to_dict()}), (201 if created else 200)
+
+
+@admin_bp.route('/incidents', methods=['GET'])
+@admin_required
+def admin_list_incidents():
+    """인시던트 목록. ?status=open|closed 로 필터."""
+    status = request.args.get('status')
+    query = Incident.query
+    if status in ('open', 'closed'):
+        query = query.filter_by(status=status)
+    rows = query.order_by(Incident.updated_at.desc()).all()
+    return jsonify({"count": len(rows), "incidents": [r.to_dict() for r in rows]}), 200
+
+
+@admin_bp.route('/incident/close', methods=['POST'])
+@admin_required
+def admin_close_incident():
+    """인시던트 종료(status=closed). body: {id}"""
+    data = request.get_json(silent=True) or {}
+    inc = db.session.get(Incident, int(data.get('id') or 0))
+    if not inc:
+        return jsonify({"msg": "없는 인시던트"}), 404
+    inc.status = 'closed'
+    inc.closed_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify({"msg": "인시던트 종료", "incident": inc.to_dict()}), 200
