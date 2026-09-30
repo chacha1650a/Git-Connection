@@ -2,7 +2,7 @@ services:
   mongodb:
     image: mongo:6.0
     container_name: gl-mongo
-    volumes: [ "mongo_data:/data/db" ]
+    volumes: [ "mongo_data:/data/db", "mongo_configdb:/data/configdb" ]
     restart: unless-stopped
 
   opensearch:
@@ -25,7 +25,7 @@ services:
     image: graylog/graylog:6.1
     container_name: gl-graylog
     environment:
-      - GRAYLOG_PASSWORD_SECRET=8f9a2b4c6d8e0f1a3b5c7d9e2f4a6b8c0d2e4f6a8b0c2d4e6f8a0b2c4d6e8f0a        # openssl rand -hex 48
+      - GRAYLOG_PASSWORD_SECRET=e7b29a4c8f1e3d6a9c2f5b8e1a4d7c0f3b6e9a2d5f8c1e4b7a0d3f6c9e2b5a8f        # openssl rand -hex 48 (백업 원본 데이터와 맞춤)
       - GRAYLOG_ROOT_PASSWORD_SHA2=8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918  # 'admin'
       - GRAYLOG_HTTP_EXTERNAL_URI=http://127.0.0.1:9000/
       - GRAYLOG_MONGODB_URI=mongodb://gl-mongo:27017/graylog
@@ -40,8 +40,11 @@ services:
       - "12201:12201/udp"    # GELF UDP
       - "12201:12201/tcp"    # GELF TCP
       - "1514:1514/udp"      # Syslog UDP
+    volumes: [ "graylog_data:/usr/share/graylog/data" ]
     restart: unless-stopped
 
 volumes:
   mongo_data:
+  mongo_configdb:
   os_data:
+  graylog_data:
