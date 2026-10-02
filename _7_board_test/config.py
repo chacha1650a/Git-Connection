@@ -49,3 +49,9 @@ class Config:
     # ── Graylog GELF (앱이 로그인 실패 등 보안 로그를 SIEM 으로 전송) ──
     GELF_HOST = os.getenv('GELF_HOST', 'localhost')
     GELF_PORT = int(os.getenv('GELF_PORT', '12201'))
+
+    # ── 보안 로그 파일 (호스트의 Wazuh 에이전트가 읽어 감) ──
+    # 기본: 이 프로젝트 폴더의 logs/security.log. 비우면 파일 기록을 끈다.
+    SECURITY_LOG_PATH = os.getenv(
+        'SECURITY_LOG_PATH',
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs', 'security.log'))

@@ -313,7 +313,8 @@ def _build_incident_summary(src_ip, events):
     worst = 'Low'
     lines = []
     for e in events:
-        by_source[e.source] = by_source.get(e.source, 0) + 1
+        src = e.source or '-'  # source 가 NULL 인 행이 섞이면 sorted() 에서 None<str 비교로 500
+        by_source[src] = by_source.get(src, 0) + 1
         if e.decision:
             actions.add(e.decision)
         if _SEV_RANK.get(e.severity, 1) > _SEV_RANK.get(worst, 1):

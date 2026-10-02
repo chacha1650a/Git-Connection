@@ -9,6 +9,7 @@ from models.user import ROLE_GENERAL, ROLE_LABELS
 
 from .gelf import send_gelf
 from .rbac import client_ip
+from .seclog import write_seclog
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/api/auth')
 
@@ -47,6 +48,7 @@ def login():
     if user and user.is_locked:
         send_gelf(f"login attempt on LOCKED account '{username}'",
                   rule='login-bruteforce', username=username, src_ip=src_ip, locked='1')
+        write_seclog('login_failed', username, src_ip)   # 잠긴 계정 시도도 실패로 기록(Wazuh)
         return jsonify({"msg": "계정이 잠겨 있습니다. 관리자에게 문의하세요.",
                         "locked": True}), 423
 
@@ -58,12 +60,15 @@ def login():
         send_gelf(f"failed login for '{username}' from {src_ip}",
                   rule='login-bruteforce', username=username or '(unknown)',
                   src_ip=src_ip, count=1)
+        write_seclog('login_failed', username or '(unknown)', src_ip)   # 호스트 로그 → Wazuh
         return jsonify({"msg": "아이디 또는 비밀번호가 올바르지 않습니다."}), 401
 
     if user.failed_logins:
         user.failed_logins = 0
         db.session.commit()
 
+    # 성공도 남긴다(계정명·출발지 IP 만, 비밀번호·토큰은 남기지 않는다)
+    write_seclog('login_success', username, src_ip)
     access_token = create_access_token(identity=str(user.id))
     return jsonify({
         "access_token": access_token,

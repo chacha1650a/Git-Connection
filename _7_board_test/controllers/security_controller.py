@@ -65,6 +65,7 @@ def create_security_event():
         level      = _as_int(data.get("level")),
         rule       = (str(data["rule"])[:50] if data.get("rule") else None),
         fail_count = _as_int(data.get("fail_count")) or 0,
+        source     = (str(data["source"])[:50] if data.get("source") else None),
     )
     db.session.add(event)
     db.session.commit()
