@@ -1,0 +1,43 @@
+<!-- Local rules -->
+
+<!-- Modify it at your will. -->
+<!-- Copyright (C) 2015, Wazuh Inc. -->
+
+<!-- Example -->
+<group name="webapp,local,">
+  <rule id="100210" level="5">
+    <decoded_as>webapp-login</decoded_as>
+    <match>login_failed</match>
+    <description>연습 웹앱 로그인 실패</description>
+    <group>authentication_failed,</group>
+  </rule>
+  <rule id="100211" level="10" frequency="6" timeframe="120">
+    <if_matched_sid>100210</if_matched_sid>
+    <same_source_ip />
+    <description>연습 웹앱 브루트포스 의심 (동일 IP 다수 실패)</description>
+    <mitre><id>T1110</id></mitre>
+    <group>authentication_failures,</group>
+  </rule>
+</group>
+
+<!-- 경로 구분자는 '.', 확장자 점은 '[.]' — 역슬래시를 아예 쓰지 않는다(9장 함정) -->
+<group name="flask_board,syscheck,local,">
+  <rule id="100221" level="8">
+    <if_sid>550,553,554</if_sid>
+    <field name="file" type="pcre2">(?i)_7_board_test.templates.</field>
+    <description>게시판 화면 템플릿 파일 변경 - 위변조 의심</description>
+    <mitre><id>T1565.001</id></mitre>
+  </rule>
+  <rule id="100220" level="12">
+    <if_sid>100221</if_sid>
+    <field name="file" type="pcre2">(?i)[.](php|jsp|jspx|asp|aspx|py|sh|exe|ps1)$</field>
+    <description>게시판 웹 디렉터리에 실행형 파일 생성/변조 - 웹셸 의심</description>
+    <mitre><id>T1505.003</id></mitre>
+  </rule>
+  <rule id="100222" level="10">
+    <if_sid>100220</if_sid>
+    <decoded_as>syscheck_deleted</decoded_as>
+    <description>게시판 웹 디렉터리의 실행형 파일 삭제 - 흔적 제거 의심(확인 필요)</description>
+    <mitre><id>T1070.004</id></mitre>
+  </rule>
+</group>
